@@ -26,9 +26,9 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.2") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.3") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
 
-console.log("Smoke test passed: NGINEER v0.1.2 open topology canvas files are present.");
+console.log("Smoke test passed: NGINEER v0.1.3 professional topology canvas files are present.");

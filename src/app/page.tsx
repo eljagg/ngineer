@@ -10,12 +10,12 @@ const commandStats = [
 export default function HomePage() {
   return (
     <>
-      <section className="workspace-header">
+      <section className="workspace-header topology-titlebar">
         <div>
           <div className="eyebrow">NGINEER visual network command center</div>
-          <h1>Open topology workspace for building, tracing, and validating networks.</h1>
+          <h1>Build, trace, and validate networks from an open topology canvas.</h1>
           <p className="lead compact-lead">
-            Demo data is loaded below so the canvas is never empty: Cisco branch access and CE, service-provider MPLS PE/P/PE, Palo Alto firewall, and Linux server path.
+            Demo data is visible by default: Cisco branch access and CE, service-provider MPLS PE/P/PE, Palo Alto firewall, and Linux server path.
           </p>
         </div>
         <div className="actions compact-actions">
@@ -25,14 +25,14 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="topology-workspace section" aria-label="Open topology viewer">
+      <section className="topology-workspace dashboard-canvas section" aria-label="Open topology viewer">
         <div className="topology-toolbar">
           <div>
             <span className="badge good">Demo data visible</span>
             <span className="badge good">Port mapped</span>
             <span className="badge warn">MPLS path</span>
           </div>
-          <div className="toolbar-note">No card borders around the canvas. The topology gets the space.</div>
+          <div className="toolbar-note">Open topology canvas with device icons and interface labels.</div>
         </div>
         <NetworkCanvas variant="builder" />
       </section>
