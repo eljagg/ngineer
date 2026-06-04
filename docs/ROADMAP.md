@@ -1,6 +1,6 @@
 # NGINEER Roadmap
 
-## v0.1.0 Foundation
+## v0.1.1 Foundation
 
 - App shell
 - Visual dashboard
@@ -61,3 +61,19 @@
 - VRFs, RD, RT
 - MP-BGP relationship modeling
 - MPLS path visualization starter
+
+
+## v0.1.1 Visual Command Center
+
+- Replace the stacked landing-page hero with a compact command-center layout.
+- Make the visual topology workspace the main dashboard feature.
+- Preserve port-mapping, traffic-flow, MPLS, IPAM, AI guardrail, and rollback requirements.
+
+
+## v0.1.2 Open Topology Canvas
+
+- Remove border-heavy layout from the main topology viewer/builder experience.
+- Make the dashboard show visible demo topology data by default.
+- Expand the topology canvas so the network diagram gets priority over cards and marketing text.
+- Add local-port to remote-port labels directly on demo links.
+- Add an open builder workspace on `/network` with tool actions and a full-width canvas.

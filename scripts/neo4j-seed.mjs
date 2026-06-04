@@ -73,7 +73,7 @@ try {
     const trimmed = statement.trim();
     if (trimmed.length > 0) await session.run(trimmed);
   }
-  console.log("Neo4j seed completed for ngineer v0.1.0.");
+  console.log("Neo4j seed completed for NGINEER v0.1.2.");
 } finally {
   await session.close();
   await driver.close();

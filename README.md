@@ -1,4 +1,4 @@
-# ngineer
+# NGINEER
 
 Visual AI-powered NGINEER.
 
@@ -70,3 +70,20 @@ source .env.local
 set +a
 npm run neo4j:seed
 ```
+
+
+## v0.1.1 Visual Command Center
+
+- Reworked the dashboard away from stacked hero wording.
+- Added a compact command-center landing page.
+- Made the topology workspace the primary visual area.
+- Kept the rule that every config must show local and remote port/interface mapping.
+
+
+## v0.1.2 Open Topology Canvas
+
+- Reworked the dashboard and network page around an open topology canvas.
+- Removed border-heavy canvas/card treatment that cramped the network view.
+- Made demo topology data clearly visible until real Neo4j topology data is loaded.
+- Added visible link labels for local port to remote port mappings.
+- Added a topology builder-style workspace with simple tool actions.

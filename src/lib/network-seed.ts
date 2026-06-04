@@ -35,13 +35,13 @@ export type TrafficHop = {
 };
 
 export const devices: DeviceNode[] = [
-  { id: "br-access-01", name: "BR-ACCESS-01", vendor: "Cisco", model: "Catalyst", role: "Access", site: "Branch", x: 7, y: 56, ports: ["Gi1/0/10", "Gi1/0/48"] },
-  { id: "br-ce-01", name: "BR-CE-01", vendor: "Cisco", model: "ISR", role: "Customer Edge", site: "Branch", x: 28, y: 56, ports: ["Gi0/0/0", "Gi0/0/1"] },
-  { id: "sp-pe-01", name: "SP-PE-01", vendor: "Cisco", model: "ASR", role: "Provider Edge", site: "Provider", x: 47, y: 33, ports: ["Gi0/0/0", "Gi0/0/2"] },
-  { id: "sp-p-01", name: "SP-P-01", vendor: "Cisco", model: "Core", role: "Provider Core", site: "Provider", x: 63, y: 33, ports: ["Te0/0/0", "Te0/0/1"] },
-  { id: "hq-pe-01", name: "HQ-PE-01", vendor: "Cisco", model: "ASR", role: "Provider Edge", site: "HQ", x: 79, y: 33, ports: ["Gi0/0/0", "Gi0/0/2"] },
-  { id: "hq-fw-01", name: "HQ-FW-01", vendor: "Palo Alto", model: "PA-Series", role: "Firewall", site: "HQ", x: 76, y: 58, ports: ["ethernet1/1", "ethernet1/2"] },
-  { id: "hq-db-01", name: "HQ-DB-01", vendor: "Linux", model: "RHEL", role: "Server", site: "HQ", x: 91, y: 69, ports: ["ens192"] }
+  { id: "br-access-01", name: "BR-ACCESS-01", vendor: "Cisco", model: "Catalyst", role: "Access", site: "Branch", x: 6, y: 58, ports: ["Gi1/0/10", "Gi1/0/48"] },
+  { id: "br-ce-01", name: "BR-CE-01", vendor: "Cisco", model: "ISR", role: "Customer Edge", site: "Branch", x: 23, y: 58, ports: ["Gi0/0/0", "Gi0/0/1"] },
+  { id: "sp-pe-01", name: "SP-PE-01", vendor: "Cisco", model: "ASR", role: "Provider Edge", site: "Provider", x: 39, y: 30, ports: ["Gi0/0/0", "Gi0/0/2"] },
+  { id: "sp-p-01", name: "SP-P-01", vendor: "Cisco", model: "Core", role: "Provider Core", site: "Provider", x: 54, y: 30, ports: ["Te0/0/0", "Te0/0/1"] },
+  { id: "hq-pe-01", name: "HQ-PE-01", vendor: "Cisco", model: "ASR", role: "Provider Edge", site: "HQ", x: 69, y: 30, ports: ["Gi0/0/0", "Gi0/0/2"] },
+  { id: "hq-fw-01", name: "HQ-FW-01", vendor: "Palo Alto", model: "PA-Series", role: "Firewall", site: "HQ", x: 69, y: 58, ports: ["ethernet1/1", "ethernet1/2"] },
+  { id: "hq-db-01", name: "HQ-DB-01", vendor: "Linux", model: "RHEL", role: "Server", site: "HQ", x: 84, y: 70, ports: ["ens192"] }
 ];
 
 export const links: NetworkLink[] = [
