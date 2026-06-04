@@ -1,0 +1,26 @@
+{
+  "name": "ngineer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Visual AI-powered network engineering assistant, source of truth, IPAM, config builder, and traffic path analyzer.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/smoke-test.mjs",
+    "neo4j:seed": "node scripts/neo4j-seed.mjs"
+  },
+  "dependencies": {
+    "neo4j-driver": "^5.28.1",
+    "next": "^15.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "typescript": "^5.8.3"
+  }
+}
