@@ -9,7 +9,7 @@ export default function NetworkPage() {
           <div className="eyebrow">Visual source of truth</div>
           <h1>Topology viewer and builder</h1>
           <p className="lead compact-lead">
-            Open canvas first. Controls stay collapsible so the topology can use the full working area.
+            Interactive canvas first. Drag devices, inspect curved links, highlight traffic flow, and keep controls collapsible so the topology owns the workspace.
           </p>
         </div>
         <div className="builder-summary" aria-label="Demo topology summary">
@@ -31,8 +31,8 @@ export default function NetworkPage() {
             </div>
             <button type="button">Add site</button>
             <button type="button">Add device</button>
-            <button type="button">Add link</button>
-            <button type="button">Map ports</button>
+            <button type="button">Add curved link</button>
+            <button type="button">Map local/remote ports</button>
             <button type="button">Trace selected path</button>
           </div>
         </details>

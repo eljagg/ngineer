@@ -637,3 +637,251 @@ p { color: var(--muted); line-height: 1.6; }
   .device-node { width: 8.4rem; }
   .device-label { max-width: 9rem; }
 }
+
+/* v0.1.5: interactive professional topology canvas with curved links and realistic device icons */
+.network-canvas {
+  isolation: isolate;
+  cursor: default;
+}
+
+.canvas-pan-zoom {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;
+  transition: transform 180ms ease;
+}
+
+.topology-links-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.topology-link-path {
+  fill: none;
+  stroke: rgba(56, 189, 248, 0.64);
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  cursor: pointer;
+  pointer-events: stroke;
+  filter: drop-shadow(0 0 14px rgba(56,189,248,0.22));
+  transition: stroke 160ms ease, stroke-width 160ms ease, opacity 160ms ease;
+}
+
+.topology-link-path:hover,
+.topology-link-selected {
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 7;
+}
+
+.topology-link-active {
+  stroke: url(#trafficFlowGradient);
+  stroke-dasharray: 12 12;
+  animation: linkFlow 1.25s linear infinite;
+  filter: url(#linkGlow);
+}
+
+
+@keyframes linkFlow {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+
+.canvas-control-strip {
+  position: absolute;
+  left: 1rem;
+  top: 3.55rem;
+  z-index: 12;
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  flex-wrap: wrap;
+  max-width: min(52rem, calc(100% - 2rem));
+}
+
+.canvas-control-strip button {
+  border: 0;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.68);
+  color: var(--text);
+  padding: 0.48rem 0.68rem;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.24);
+  cursor: pointer;
+}
+
+.canvas-control-strip button:hover {
+  background: rgba(56, 189, 248, 0.18);
+}
+
+.device-node {
+  appearance: none;
+  border: 0;
+  color: inherit;
+  cursor: grab;
+  transform: translate(-50%, -50%);
+  user-select: none;
+}
+
+.device-node:active { cursor: grabbing; }
+.device-node:focus-visible,
+.link-label-button:focus-visible {
+  outline: 2px solid rgba(56,189,248,0.85);
+  outline-offset: 4px;
+}
+
+.device-node-selected .device-icon {
+  filter: drop-shadow(0 0 18px rgba(56,189,248,0.75)) drop-shadow(0 18px 34px rgba(0,0,0,0.48));
+}
+
+.device-node-selected .device-label {
+  box-shadow: 0 0 0 1px rgba(56,189,248,0.65), 0 16px 38px rgba(0,0,0,0.34);
+}
+
+.device-label {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.08rem;
+}
+
+.device-label span { display: block; }
+
+.network-icon-svg .chassis-shadow {
+  fill: rgba(0, 0, 0, 0.32);
+  stroke: none;
+}
+
+.network-icon-svg .chassis {
+  stroke: rgba(125, 211, 252, 0.78);
+  stroke-width: 2.3;
+  vector-effect: non-scaling-stroke;
+}
+
+.network-icon-svg .bezel,
+.network-icon-svg .ports-grid rect,
+.network-icon-svg .sfp,
+.network-icon-svg .drive-bays rect {
+  fill: rgba(2, 6, 23, 0.78);
+  stroke: rgba(148, 163, 184, 0.6);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.network-icon-svg .top-highlight,
+.network-icon-svg .vent,
+.network-icon-svg .brick-lines path,
+.network-icon-svg .core-arrow,
+.network-icon-svg .router-arrows,
+.network-icon-svg .router-uplink,
+.network-icon-svg .shield-mark {
+  fill: none;
+  stroke: rgba(226, 232, 240, 0.72);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.network-icon-svg .routing-plane,
+.network-icon-svg .core-ring,
+.network-icon-svg .shield {
+  fill: rgba(2, 6, 23, 0.35);
+  stroke: rgba(96, 203, 255, 0.76);
+  stroke-width: 2.1;
+  vector-effect: non-scaling-stroke;
+}
+
+.network-icon-svg .led {
+  fill: rgba(148, 163, 184, 0.84);
+  stroke: rgba(2, 6, 23, 0.72);
+  stroke-width: 0.8;
+}
+
+.network-icon-svg .led-good { fill: rgba(34, 197, 94, 0.95); }
+.network-icon-svg .led-warn { fill: rgba(245, 158, 11, 0.95); }
+
+.realistic-firewall .chassis { stroke: rgba(251, 191, 36, 0.86); }
+.realistic-firewall .shield { stroke: rgba(251, 191, 36, 0.9); }
+.realistic-server .chassis { stroke: rgba(74, 222, 128, 0.82); }
+.realistic-core .chassis { stroke: rgba(167, 139, 250, 0.86); }
+.realistic-router .chassis { stroke: rgba(56, 189, 248, 0.82); }
+
+.port-lights {
+  display: flex;
+  gap: 0.22rem;
+  margin-top: 0.34rem;
+}
+
+.port-lights span {
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.48);
+}
+
+.port-lights span:nth-child(2n + 1) { background: rgba(34, 197, 94, 0.9); }
+.port-lights span:nth-child(4n) { background: rgba(56, 189, 248, 0.88); }
+
+.link-label-button {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.link-label-button:hover,
+.link-label-button.selected {
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 0 0 1px rgba(56,189,248,0.55), 0 12px 30px rgba(0,0,0,0.3);
+}
+
+.selection-inspector {
+  position: absolute;
+  right: 1.1rem;
+  bottom: 1.1rem;
+  z-index: 14;
+  width: min(23rem, calc(100% - 2.2rem));
+  border-radius: 1rem;
+  padding: 0.95rem;
+  background: rgba(2, 6, 23, 0.76);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 18px 48px rgba(0,0,0,0.32);
+}
+
+.selection-inspector strong {
+  display: block;
+  margin-top: 0.55rem;
+  font-size: 1.05rem;
+}
+
+.selection-inspector p {
+  margin: 0.45rem 0 0.7rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.inspector-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.35rem 0.8rem;
+  font-size: 0.82rem;
+}
+
+.inspector-grid span { color: var(--muted); }
+.inspector-grid b { color: var(--text); font-weight: 800; }
+
+@media (max-width: 780px) {
+  .canvas-control-strip {
+    position: static;
+    padding: 0.85rem 0.85rem 0;
+  }
+  .selection-inspector {
+    left: 0.8rem;
+    right: 0.8rem;
+    bottom: 0.8rem;
+    width: auto;
+  }
+}
