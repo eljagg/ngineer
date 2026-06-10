@@ -1,6 +1,6 @@
 {
   "name": "ngineer",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "Visual AI-powered network engineering assistant, source of truth, IPAM, config builder, and traffic path analyzer.",
   "scripts": {
@@ -16,7 +16,9 @@
     "neo4j-driver": "^5.28.1",
     "next": "^15.3.3",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "@xyflow/react": "^12.8.5",
+    "elkjs": "^0.10.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

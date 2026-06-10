@@ -1,52 +1,47 @@
-import { NetworkCanvas } from "@/components/NetworkCanvas";
+import { NetworkFlowCanvas } from "@/components/NetworkFlowCanvas";
 import { devices, links } from "@/lib/network-seed";
 
 export default function NetworkPage() {
   return (
     <>
-      <section className="workspace-header topology-titlebar">
+      <section className="workspace-header topology-titlebar rf-titlebar">
         <div>
           <div className="eyebrow">Visual source of truth</div>
-          <h1>Topology viewer and builder</h1>
+          <h1>Interactive topology viewer and builder</h1>
           <p className="lead compact-lead">
-            Interactive canvas first. Drag devices, inspect curved links, highlight traffic flow, and keep controls collapsible so the topology owns the workspace.
+            React Flow powers the canvas for drag/drop devices, selectable links, port handles, curved traffic paths, auto-layout, and Neo4j-ready topology data.
           </p>
         </div>
         <div className="builder-summary" aria-label="Demo topology summary">
           <span><strong>{devices.length}</strong> devices</span>
           <span><strong>{links.length}</strong> links</span>
-          <span><strong>6</strong> port-mapped hops</span>
+          <span><strong>ELK</strong> auto-layout</span>
         </div>
       </section>
 
-      <section className="topology-builder-shell section" aria-label="Topology builder workspace">
-        <details className="builder-tools-panel" open>
+      <section className="topology-builder-shell section rf-builder-shell" aria-label="Topology builder workspace">
+        <details className="builder-tools-panel rf-tools-panel" open>
           <summary aria-label="Collapse or expand topology tools">
             <span>Tools</span>
           </summary>
           <div className="builder-tools-content" aria-label="Topology tools">
             <div>
               <div className="eyebrow">Builder tools</div>
-              <h2>Network actions</h2>
+              <h2>Topology actions</h2>
+              <p>
+                Use the canvas buttons first. This side rail stays secondary and will become the device palette, site picker, and Neo4j source-of-truth browser.
+              </p>
             </div>
-            <button type="button">Add site</button>
-            <button type="button">Add device</button>
-            <button type="button">Add curved link</button>
-            <button type="button">Map local/remote ports</button>
-            <button type="button">Trace selected path</button>
+            <button type="button">Device palette</button>
+            <button type="button">Site / rack view</button>
+            <button type="button">Port mapper</button>
+            <button type="button">Path analysis</button>
+            <button type="button">Save to Neo4j</button>
           </div>
         </details>
 
-        <div className="topology-workspace builder-canvas" aria-label="Open topology builder canvas">
-          <div className="topology-toolbar">
-            <div>
-              <span className="badge good">Branch</span>
-              <span className="badge warn">Provider MPLS</span>
-              <span className="badge good">HQ</span>
-            </div>
-            <div className="toolbar-note">Demo topology remains visible until real Neo4j topology data is loaded.</div>
-          </div>
-          <NetworkCanvas variant="builder" />
+        <div className="topology-workspace builder-canvas rf-canvas-workspace" aria-label="Open topology builder canvas">
+          <NetworkFlowCanvas />
         </div>
       </section>
 
