@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { type CSSProperties, useCallback, useMemo, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -17,6 +17,7 @@ import {
   useNodesState,
   useReactFlow,
   getBezierPath,
+  getSmoothStepPath,
   Handle,
   type Edge,
   type EdgeProps,
@@ -30,17 +31,30 @@ import { devices, links, type DeviceNode, type DeviceRole, type NetworkLink } fr
 
 type DeviceKind = "switch" | "router" | "core" | "firewall" | "server";
 type LayoutDirection = "RIGHT" | "DOWN";
+type PortSide = "north" | "east" | "south" | "west";
+type LinkStyle = "orthogonal" | "spline" | "security" | "server";
+
+type PortAnchor = {
+  id: string;
+  port: string;
+  side: PortSide;
+  offset: number;
+  protocol?: string;
+  purpose?: string;
+};
 
 type NetworkNodeData = {
   device: DeviceNode;
   kind: DeviceKind;
   status: "healthy" | "warning" | "critical";
+  portAnchors: PortAnchor[];
 };
 
 type NetworkEdgeData = {
   link: NetworkLink;
   showPorts: boolean;
   active: boolean;
+  linkStyle: LinkStyle;
 };
 
 type NetworkFlowNode = Node<NetworkNodeData, "networkDevice">;
@@ -52,8 +66,9 @@ type Selection =
   | null;
 
 const elk = new ELK();
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 136;
+const NODE_WIDTH = 246;
+const NODE_HEIGHT = 152;
+const deviceById = new Map(devices.map((device) => [device.id, device]));
 
 function deviceKind(role: DeviceRole): DeviceKind {
   if (role === "Firewall") return "firewall";
@@ -65,8 +80,8 @@ function deviceKind(role: DeviceRole): DeviceKind {
 
 function initialNodePosition(device: DeviceNode) {
   return {
-    x: Math.round(device.x * 12.5),
-    y: Math.round(device.y * 7.6)
+    x: Math.round(device.x * 13.5),
+    y: Math.round(device.y * 8.4)
   };
 }
 
@@ -74,6 +89,98 @@ function statusForDevice(device: DeviceNode): NetworkNodeData["status"] {
   if (device.role === "Firewall") return "warning";
   if (device.role === "Server") return "healthy";
   return "healthy";
+}
+
+function slugPort(port: string): string {
+  return port.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "port";
+}
+
+function endpointSide(link: NetworkLink, deviceId: string): PortSide {
+  const device = deviceById.get(deviceId);
+  const other = deviceById.get(link.a === deviceId ? link.b : link.a);
+  if (!device || !other) return "east";
+
+  const dx = other.x - device.x;
+  const dy = other.y - device.y;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "east" : "west";
+  return dy >= 0 ? "south" : "north";
+}
+
+function portHandleId(port: string, side: PortSide): string {
+  return `${slugPort(port)}-${side}`;
+}
+
+function positionForSide(side: PortSide): Position {
+  if (side === "west") return Position.Left;
+  if (side === "east") return Position.Right;
+  if (side === "north") return Position.Top;
+  return Position.Bottom;
+}
+
+function styleForAnchor(anchor: PortAnchor): CSSProperties {
+  if (anchor.side === "west" || anchor.side === "east") {
+    return { top: `${anchor.offset}%` };
+  }
+  return { left: `${anchor.offset}%` };
+}
+
+function buildPortAnchors(device: DeviceNode): PortAnchor[] {
+  const anchorsByPortSide = new Map<string, Omit<PortAnchor, "offset">>();
+
+  for (const link of links) {
+    if (link.a === device.id) {
+      const side = endpointSide(link, device.id);
+      const key = `${link.aPort}:${side}`;
+      anchorsByPortSide.set(key, {
+        id: portHandleId(link.aPort, side),
+        port: link.aPort,
+        side,
+        protocol: link.protocol,
+        purpose: link.purpose
+      });
+    }
+    if (link.b === device.id) {
+      const side = endpointSide(link, device.id);
+      const key = `${link.bPort}:${side}`;
+      anchorsByPortSide.set(key, {
+        id: portHandleId(link.bPort, side),
+        port: link.bPort,
+        side,
+        protocol: link.protocol,
+        purpose: link.purpose
+      });
+    }
+  }
+
+  for (const [index, port] of device.ports.entries()) {
+    if (![...anchorsByPortSide.values()].some((anchor) => anchor.port === port)) {
+      const side: PortSide = device.role === "Server" ? "west" : index % 2 === 0 ? "east" : "south";
+      anchorsByPortSide.set(`${port}:${side}`, {
+        id: portHandleId(port, side),
+        port,
+        side,
+        protocol: "available",
+        purpose: "Available mapped port"
+      });
+    }
+  }
+
+  const anchors = [...anchorsByPortSide.values()].map((anchor) => ({ ...anchor, offset: 50 }));
+  for (const side of ["north", "east", "south", "west"] as const) {
+    const sideAnchors = anchors.filter((anchor) => anchor.side === side);
+    sideAnchors.forEach((anchor, index) => {
+      anchor.offset = Math.round(((index + 1) / (sideAnchors.length + 1)) * 100);
+    });
+  }
+  return anchors;
+}
+
+function linkStyleFor(link: NetworkLink): LinkStyle {
+  const protocol = (link.protocol || "").toLowerCase();
+  if (protocol.includes("firewall") || protocol.includes("nat") || protocol.includes("security")) return "security";
+  if (protocol.includes("server")) return "server";
+  if (protocol.includes("mpls") || protocol.includes("bgp") || protocol.includes("wan")) return "spline";
+  return "orthogonal";
 }
 
 function buildNodes(): NetworkFlowNode[] {
@@ -84,157 +191,101 @@ function buildNodes(): NetworkFlowNode[] {
     data: {
       device,
       kind: deviceKind(device.role),
-      status: statusForDevice(device)
+      status: statusForDevice(device),
+      portAnchors: buildPortAnchors(device)
     }
   }));
 }
 
 function buildEdges(showPorts: boolean, activePath: boolean): NetworkFlowEdge[] {
-  return links.map((link) => ({
-    id: link.id,
-    source: link.a,
-    target: link.b,
-    sourceHandle: "east",
-    targetHandle: "west",
-    type: "networkLink",
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      width: 18,
-      height: 18,
-      color: activePath ? "#38bdf8" : "rgba(148, 163, 184, 0.78)"
-    },
-    animated: activePath,
-    data: {
-      link,
-      showPorts,
-      active: activePath
-    }
-  }));
+  return links.map((link) => {
+    const aSide = endpointSide(link, link.a);
+    const bSide = endpointSide(link, link.b);
+    const linkStyle = linkStyleFor(link);
+
+    return {
+      id: link.id,
+      source: link.a,
+      target: link.b,
+      sourceHandle: portHandleId(link.aPort, aSide),
+      targetHandle: portHandleId(link.bPort, bSide),
+      type: "networkLink",
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 16,
+        height: 16,
+        color: activePath ? "#38bdf8" : "rgba(148, 163, 184, 0.78)"
+      },
+      animated: activePath,
+      data: {
+        link,
+        showPorts,
+        active: activePath,
+        linkStyle
+      }
+    };
+  });
 }
 
-function RackDeviceIcon({ kind }: { kind: DeviceKind }) {
-  if (kind === "switch") {
-    return (
-      <svg viewBox="0 0 240 130" className="rf-device-svg" aria-hidden="true">
-        <defs>
-          <linearGradient id="rfSwitchBody" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#32415c" />
-            <stop offset="50%" stopColor="#0d1727" />
-            <stop offset="100%" stopColor="#030712" />
-          </linearGradient>
-        </defs>
-        <path className="rf-device-shadow" d="M26 37h170l26 20-13 46H43L20 82z" />
-        <path className="rf-device-chassis" d="M22 28h170l30 22-13 46H40L16 75z" fill="url(#rfSwitchBody)" />
-        <path className="rf-faceplate" d="M43 51h122v29H43z" />
-        {Array.from({ length: 16 }).map((_, index) => (
-          <rect className="rf-rj45" key={index} x={52 + index * 6.6} y="59" width="4.6" height="10" rx="1" />
-        ))}
-        <rect className="rf-sfp" x="173" y="58" width="18" height="12" rx="2" />
-        <rect className="rf-sfp" x="194" y="58" width="18" height="12" rx="2" />
-        <circle className="rf-led rf-led-green" cx="46" cy="88" r="3" />
-        <circle className="rf-led rf-led-blue" cx="58" cy="88" r="2.4" />
-        <path className="rf-top-highlight" d="M23 28h169l30 22" />
-      </svg>
-    );
-  }
-
-  if (kind === "firewall") {
-    return (
-      <svg viewBox="0 0 240 130" className="rf-device-svg rf-firewall-svg" aria-hidden="true">
-        <defs>
-          <linearGradient id="rfFwBody" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#4a3214" />
-            <stop offset="50%" stopColor="#111827" />
-            <stop offset="100%" stopColor="#030712" />
-          </linearGradient>
-        </defs>
-        <path className="rf-device-shadow" d="M36 34h154l23 20v48H51L28 80z" />
-        <path className="rf-device-chassis" d="M31 25h154l29 23v48H47L22 73z" fill="url(#rfFwBody)" />
-        <path className="rf-brick" d="M51 47h130M51 63h130M51 79h130M77 47v16M112 63v16M149 47v16M173 63v16" />
-        <path className="rf-shield" d="M121 44l24 11v20c0 15-10 25-24 33-15-8-24-18-24-33V55z" />
-        <path className="rf-shield-check" d="M109 74l9 8 17-24" />
-        <circle className="rf-led rf-led-amber" cx="49" cy="89" r="3" />
-        <circle className="rf-led" cx="61" cy="89" r="2.4" />
-      </svg>
-    );
-  }
-
-  if (kind === "server") {
-    return (
-      <svg viewBox="0 0 240 130" className="rf-device-svg rf-server-svg" aria-hidden="true">
-        <defs>
-          <linearGradient id="rfServerBody" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#164933" />
-            <stop offset="48%" stopColor="#0c1b2f" />
-            <stop offset="100%" stopColor="#030712" />
-          </linearGradient>
-        </defs>
-        <path className="rf-device-shadow" d="M36 28h154l25 22v56H52L28 83z" />
-        <path className="rf-device-chassis" d="M31 20h154l29 24v56H48L22 76z" fill="url(#rfServerBody)" />
-        {Array.from({ length: 10 }).map((_, index) => (
-          <rect className="rf-drive" key={index} x={51 + index * 13.2} y="52" width="9" height="25" rx="2" />
-        ))}
-        <path className="rf-vent" d="M51 37h77M141 37h38" />
-        <circle className="rf-led rf-led-green" cx="49" cy="88" r="3" />
-        <circle className="rf-led" cx="61" cy="88" r="2.4" />
-      </svg>
-    );
-  }
-
-  if (kind === "core") {
-    return (
-      <svg viewBox="0 0 240 130" className="rf-device-svg rf-core-svg" aria-hidden="true">
-        <defs>
-          <linearGradient id="rfCoreBody" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#403a74" />
-            <stop offset="50%" stopColor="#0b1d34" />
-            <stop offset="100%" stopColor="#030712" />
-          </linearGradient>
-        </defs>
-        <path className="rf-device-shadow" d="M31 35h170l19 18v51H45L25 80z" />
-        <path className="rf-device-chassis" d="M26 26h170l23 20v51H40L18 73z" fill="url(#rfCoreBody)" />
-        <ellipse className="rf-core-ring" cx="121" cy="63" rx="45" ry="22" />
-        <path className="rf-core-arrow" d="M91 63h60M108 48L91 63l17 15M134 48l17 15-17 15" />
-        {Array.from({ length: 8 }).map((_, index) => (
-          <rect className="rf-rj45" key={index} x={62 + index * 11.2} y="89" width="7" height="7" rx="1" />
-        ))}
-      </svg>
-    );
-  }
+function RackDeviceIcon({ kind, device }: { kind: DeviceKind; device: DeviceNode }) {
+  const portCount = kind === "switch" ? 24 : kind === "firewall" ? 8 : kind === "server" ? 12 : 10;
+  const rows = kind === "switch" ? 2 : 1;
+  const portItems = Array.from({ length: portCount });
 
   return (
-    <svg viewBox="0 0 240 130" className="rf-device-svg rf-router-svg" aria-hidden="true">
+    <svg viewBox="0 0 270 138" className={`rf-device-svg rf-device-svg-${kind}`} aria-hidden="true">
       <defs>
-        <linearGradient id="rfRouterBody" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#173b5a" />
-          <stop offset="50%" stopColor="#0c1d32" />
+        <linearGradient id={`rfBody-${device.id}`} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor={kind === "firewall" ? "#704319" : kind === "server" ? "#15543a" : kind === "core" ? "#403a74" : "#1d4c73"} />
+          <stop offset="46%" stopColor="#0f1d31" />
           <stop offset="100%" stopColor="#030712" />
         </linearGradient>
+        <linearGradient id={`rfFace-${device.id}`} x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="rgba(148,163,184,0.28)" />
+          <stop offset="45%" stopColor="rgba(15,23,42,0.86)" />
+          <stop offset="100%" stopColor="rgba(2,6,23,0.96)" />
+        </linearGradient>
       </defs>
-      <path className="rf-device-shadow" d="M44 29h145l27 23-17 48H52L26 76z" />
-      <path className="rf-device-chassis" d="M38 20h145l31 24-18 48H48L18 69z" fill="url(#rfRouterBody)" />
-      <ellipse className="rf-route-plane" cx="119" cy="58" rx="51" ry="24" />
-      <path className="rf-route-arrows" d="M84 58h70M104 42L84 58l20 16M134 42l20 16-20 16" />
-      <path className="rf-router-uplink" d="M119 31V13M119 102V84M99 13l20-12 20 12M99 112l20 13 20-13" />
-      <circle className="rf-led rf-led-green" cx="48" cy="82" r="3" />
-      <circle className="rf-led" cx="61" cy="82" r="2.4" />
+      <path className="rf-device-shadow" d="M31 32h182l31 23-14 56H49L20 84z" />
+      <path className="rf-device-chassis" d="M27 23h185l35 25-16 57H45L15 77z" fill={`url(#rfBody-${device.id})`} />
+      <path className="rf-device-top" d="M28 23h184l35 25H61z" />
+      <rect className="rf-faceplate" x="49" y="51" width="151" height="36" rx="5" fill={`url(#rfFace-${device.id})`} />
+      {kind === "server" ? (
+        portItems.map((_, index) => <rect className="rf-drive" key={index} x={58 + index * 11.6} y="55" width="8" height="26" rx="2" />)
+      ) : (
+        portItems.map((_, index) => {
+          const row = rows === 2 ? index % 2 : 0;
+          const col = rows === 2 ? Math.floor(index / 2) : index;
+          return <rect className="rf-rj45" key={index} x={58 + col * 10.2} y={57 + row * 14} width="7" height="8" rx="1.5" />;
+        })
+      )}
+      {kind === "firewall" ? <path className="rf-shield" d="M222 48l23 10v18c0 15-10 25-23 31-14-7-23-16-23-31V58z" /> : null}
+      {kind === "router" || kind === "core" ? <path className="rf-route-arrows" d="M203 67h43M219 54l-16 13 16 13M231 54l15 13-15 13" /> : null}
+      <text x="57" y="101" className="rf-device-svg-label">{device.vendor}</text>
+      <text x="174" y="101" className="rf-device-svg-model">{device.model}</text>
+      <circle className="rf-led rf-led-green" cx="42" cy="94" r="3.2" />
+      <circle className="rf-led rf-led-blue" cx="54" cy="94" r="2.6" />
+      <circle className={kind === "firewall" ? "rf-led rf-led-amber" : "rf-led"} cx="66" cy="94" r="2.4" />
     </svg>
   );
 }
 
 function NetworkDeviceNode({ data, selected }: NodeProps<NetworkFlowNode>) {
-  const { device, kind, status } = data;
+  const { device, kind, status, portAnchors } = data;
   const statusClass = status === "healthy" ? "good" : status === "warning" ? "warn" : "danger";
 
   return (
-    <div className={`rf-device-node rf-device-${kind} ${selected ? "rf-device-selected" : ""}`}>
-      <Handle type="target" position={Position.Left} id="west" className="rf-handle rf-handle-west" />
-      <Handle type="source" position={Position.Right} id="east" className="rf-handle rf-handle-east" />
-      <Handle type="target" position={Position.Top} id="north" className="rf-handle rf-handle-north" />
-      <Handle type="source" position={Position.Bottom} id="south" className="rf-handle rf-handle-south" />
+    <div className={`rf-device-node rf-port-aware-node rf-device-${kind} ${selected ? "rf-device-selected" : ""}`}>
+      {portAnchors.map((anchor) => (
+        <div key={`${anchor.id}-wrap`} className={`rf-port-anchor-wrap rf-port-${anchor.side}`} style={styleForAnchor(anchor)} title={`${anchor.port} · ${anchor.protocol || "mapped port"}`}>
+          <Handle type="source" position={positionForSide(anchor.side)} id={anchor.id} className={`rf-handle rf-port-handle rf-source-handle rf-port-${anchor.side}`} />
+          <Handle type="target" position={positionForSide(anchor.side)} id={anchor.id} className={`rf-handle rf-port-handle rf-target-handle rf-port-${anchor.side}`} />
+          <span className="rf-port-dot" />
+        </div>
+      ))}
 
       <div className="rf-device-icon-wrap">
-        <RackDeviceIcon kind={kind} />
+        <RackDeviceIcon kind={kind} device={device} />
       </div>
       <div className="rf-device-caption">
         <span className={`rf-status-dot ${statusClass}`} />
@@ -248,19 +299,21 @@ function NetworkDeviceNode({ data, selected }: NodeProps<NetworkFlowNode>) {
 }
 
 function NetworkLinkEdge(props: EdgeProps<NetworkFlowEdge>) {
-  const [edgePath, labelX, labelY] = getBezierPath({
+  const link = props.data?.link;
+  const active = Boolean(props.data?.active);
+  const showPorts = Boolean(props.data?.showPorts);
+  const linkStyle = props.data?.linkStyle || "orthogonal";
+  const edgeArgs = {
     sourceX: props.sourceX,
     sourceY: props.sourceY,
     sourcePosition: props.sourcePosition,
     targetX: props.targetX,
     targetY: props.targetY,
-    targetPosition: props.targetPosition,
-    curvature: 0.42
-  });
-
-  const link = props.data?.link;
-  const active = Boolean(props.data?.active);
-  const showPorts = Boolean(props.data?.showPorts);
+    targetPosition: props.targetPosition
+  };
+  const [edgePath, labelX, labelY] = linkStyle === "spline"
+    ? getBezierPath({ ...edgeArgs, curvature: 0.28 })
+    : getSmoothStepPath({ ...edgeArgs, borderRadius: linkStyle === "security" ? 18 : 10, offset: 12 });
 
   return (
     <>
@@ -268,13 +321,13 @@ function NetworkLinkEdge(props: EdgeProps<NetworkFlowEdge>) {
         id={props.id}
         path={edgePath}
         markerEnd={props.markerEnd}
-        className={`rf-network-edge ${active ? "rf-network-edge-active" : ""} ${props.selected ? "rf-network-edge-selected" : ""}`}
+        className={`rf-network-edge rf-edge-${linkStyle} ${active ? "rf-network-edge-active" : ""} ${props.selected ? "rf-network-edge-selected" : ""}`}
       />
       {showPorts && link ? (
         <EdgeLabelRenderer>
           <button
             type="button"
-            className="rf-edge-label"
+            className={`rf-edge-label rf-edge-label-${linkStyle}`}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)` }}
           >
             <strong>{link.aPort}</strong>
@@ -294,6 +347,7 @@ const edgeTypes = { networkLink: NetworkLinkEdge };
 function SelectionInspector({ selection }: { selection: Selection }) {
   if (selection?.type === "device") {
     const device = selection.node.data.device;
+    const anchors = selection.node.data.portAnchors;
     return (
       <aside className="rf-inspector" aria-label="Selected device details">
         <span className="badge good">Selected device</span>
@@ -301,8 +355,8 @@ function SelectionInspector({ selection }: { selection: Selection }) {
         <p>{device.vendor} {device.model} · {device.role}</p>
         <dl>
           <div><dt>Site</dt><dd>{device.site}</dd></div>
-          <div><dt>Ports</dt><dd>{device.ports.join(" / ")}</dd></div>
-          <div><dt>Source of truth</dt><dd>Neo4j node-ready</dd></div>
+          <div><dt>Mapped ports</dt><dd>{anchors.map((anchor) => `${anchor.port} (${anchor.side})`).join(" / ")}</dd></div>
+          <div><dt>Source of truth</dt><dd>Port-aware Neo4j node-ready</dd></div>
         </dl>
       </aside>
     );
@@ -313,7 +367,7 @@ function SelectionInspector({ selection }: { selection: Selection }) {
     if (!link) return null;
     return (
       <aside className="rf-inspector" aria-label="Selected link details">
-        <span className="badge warn">Selected link</span>
+        <span className="badge warn">Selected port-mapped link</span>
         <strong>{link.aPort} → {link.bPort}</strong>
         <p>{link.purpose}</p>
         <dl>
@@ -328,9 +382,9 @@ function SelectionInspector({ selection }: { selection: Selection }) {
 
   return (
     <aside className="rf-inspector" aria-label="Topology interaction hints">
-      <span className="badge good">Interactive topology engine</span>
-      <strong>React Flow + ELK foundation</strong>
-      <p>Drag devices, create links, inspect ports, auto-layout the topology, and keep the source-of-truth model ready for Neo4j data.</p>
+      <span className="badge good">Port-aware topology engine</span>
+      <strong>React Flow handles + ELK routing</strong>
+      <p>Connections now dock to mapped port anchors instead of floating around device icons. Drag, inspect, auto-layout, and prepare for Neo4j-driven topology reconstruction.</p>
     </aside>
   );
 }
@@ -341,12 +395,18 @@ async function getLayoutedNodes(nodes: NetworkFlowNode[], edges: NetworkFlowEdge
     layoutOptions: {
       "elk.algorithm": "layered",
       "elk.direction": direction,
-      "elk.edgeRouting": "SPLINES",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "120",
-      "elk.spacing.nodeNode": "85",
-      "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX"
+      "elk.edgeRouting": "ORTHOGONAL",
+      "elk.layered.spacing.nodeNodeBetweenLayers": "90",
+      "elk.spacing.nodeNode": "60",
+      "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+      "elk.portConstraints": "FIXED_SIDE"
     },
-    children: nodes.map((node) => ({ id: node.id, width: NODE_WIDTH, height: NODE_HEIGHT })),
+    children: nodes.map((node) => ({
+      id: node.id,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+      layoutOptions: { "elk.portConstraints": "FIXED_SIDE" }
+    })),
     edges: edges.map((edge) => ({ id: edge.id, sources: [edge.source], targets: [edge.target] }))
   };
 
@@ -386,14 +446,15 @@ function NetworkFlowCanvasInner() {
         animated: nextActivePath,
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          width: 18,
-          height: 18,
+          width: 16,
+          height: 16,
           color: nextActivePath ? "#38bdf8" : "rgba(148, 163, 184, 0.78)"
         },
         data: {
           link: edge.data.link,
           showPorts: nextShowPorts,
-          active: nextActivePath
+          active: nextActivePath,
+          linkStyle: edge.data.linkStyle || linkStyleFor(edge.data.link)
         }
       };
     }));
@@ -416,18 +477,17 @@ function NetworkFlowCanvasInner() {
   }, [refreshEdges, showPorts]);
 
   const onConnect: OnConnect = useCallback((connection) => {
+    if (!connection.source || !connection.target) return;
     const newLink: NetworkLink = {
       id: `manual-${Date.now()}`,
-      a: connection.source || "unknown-local",
+      a: connection.source,
       aPort: connection.sourceHandle || "port-a",
-      b: connection.target || "unknown-remote",
+      b: connection.target,
       bPort: connection.targetHandle || "port-b",
       purpose: "Manual draft link",
-      protocol: "Unassigned",
+      protocol: "Draft port map",
       vrf: "Draft"
     };
-
-    if (!connection.source || !connection.target) return;
 
     const edge: NetworkFlowEdge = {
       id: newLink.id,
@@ -437,7 +497,7 @@ function NetworkFlowCanvasInner() {
       targetHandle: connection.targetHandle,
       type: "networkLink",
       markerEnd: { type: MarkerType.ArrowClosed },
-      data: { link: newLink, showPorts, active: false }
+      data: { link: newLink, showPorts, active: false, linkStyle: "orthogonal" }
     };
 
     setEdges((current) => [...current, edge]);
@@ -454,7 +514,7 @@ function NetworkFlowCanvasInner() {
       site: "Draft",
       x: 50,
       y: 50,
-      ports: ["Gi0/0/0", "Gi0/0/1"]
+      ports: ["Gi0/0/0", "Gi0/0/1", "Gi0/0/2"]
     };
 
     setNodes((current) => [
@@ -462,8 +522,8 @@ function NetworkFlowCanvasInner() {
       {
         id,
         type: "networkDevice",
-        position: { x: 360 + current.length * 18, y: 300 + current.length * 10 },
-        data: { device, kind: "router", status: "warning" }
+        position: { x: 360 + current.length * 24, y: 300 + current.length * 14 },
+        data: { device, kind: "router", status: "warning", portAnchors: buildPortAnchors(device) }
       }
     ]);
   }, [nodes.length, setNodes]);
@@ -474,13 +534,13 @@ function NetworkFlowCanvasInner() {
     setNodes(nextNodes);
     setEdges(nextEdges);
     setSelection(null);
-    window.requestAnimationFrame(() => fitView({ padding: 0.18, duration: 350 }));
+    window.requestAnimationFrame(() => fitView({ padding: 0.13, duration: 350 }));
   }, [activePath, fitView, setEdges, setNodes, showPorts]);
 
   const runAutoLayout = useCallback(async (direction: LayoutDirection = layoutDirection) => {
     const nextNodes = await getLayoutedNodes(nodes, edges, direction);
     setNodes(nextNodes);
-    window.requestAnimationFrame(() => fitView({ padding: 0.18, duration: 450 }));
+    window.requestAnimationFrame(() => fitView({ padding: 0.13, duration: 450 }));
   }, [edges, fitView, layoutDirection, nodes, setNodes]);
 
   const switchDirection = useCallback(async () => {
@@ -490,7 +550,7 @@ function NetworkFlowCanvasInner() {
   }, [layoutDirection, runAutoLayout]);
 
   return (
-    <div className="rf-topology-shell">
+    <div className="rf-topology-shell rf-topology-shell-v2">
       <svg width="0" height="0" aria-hidden="true" focusable="false">
         <defs>
           <linearGradient id="trafficFlowGradient" x1="0" y1="0" x2="1" y2="0">
@@ -511,17 +571,17 @@ function NetworkFlowCanvasInner() {
         onNodeClick={(_, node) => setSelection({ type: "device", node })}
         onEdgeClick={(_, edge) => setSelection({ type: "link", edge })}
         onPaneClick={() => setSelection(null)}
-        connectionLineType={ConnectionLineType.Bezier}
+        connectionLineType={ConnectionLineType.SmoothStep}
         defaultEdgeOptions={{ type: "networkLink", markerEnd: { type: MarkerType.ArrowClosed } }}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.25}
-        maxZoom={2}
+        fitViewOptions={{ padding: 0.16 }}
+        minZoom={0.2}
+        maxZoom={2.2}
         panOnScroll
         selectionOnDrag
         proOptions={{ hideAttribution: true }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={24} size={1} />
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1} />
         <Controls position="bottom-left" showInteractive={false} />
         <MiniMap
           position="bottom-right"
@@ -539,18 +599,18 @@ function NetworkFlowCanvasInner() {
         <Panel position="top-left" className="rf-control-panel">
           <button type="button" onClick={() => runAutoLayout()}>Auto layout</button>
           <button type="button" onClick={switchDirection}>{layoutDirection === "RIGHT" ? "Vertical layout" : "Horizontal layout"}</button>
+          <button type="button" onClick={togglePorts}>{showPorts ? "Hide port labels" : "Show port labels"}</button>
           <button type="button" onClick={toggleActivePath}>{activePath ? "Unhighlight path" : "Highlight path"}</button>
-          <button type="button" onClick={togglePorts}>{showPorts ? "Hide ports" : "Show ports"}</button>
           <button type="button" onClick={addDraftDevice}>Add draft device</button>
           <button type="button" onClick={resetDemo}>Reset demo</button>
         </Panel>
         <Panel position="top-right" className="rf-mode-panel">
-          <span className="badge good">{nodes.length} devices</span>
-          <span className="badge warn">{edges.length} links</span>
-          <span className="badge good">React Flow + ELK</span>
+          <span className="badge good">Port-aware</span>
+          <span>{nodes.length} devices</span>
+          <span>{edges.length} links</span>
         </Panel>
+        <SelectionInspector selection={selection} />
       </ReactFlow>
-      <SelectionInspector selection={selection} />
     </div>
   );
 }

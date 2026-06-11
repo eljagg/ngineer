@@ -327,6 +327,504 @@ function extractHostname(text: string, vendor: VendorKind): string | undefined {
   if (windows) return windows.trim();
   return vendor === "Unknown" ? undefined : `${vendor}-import`;
 }
+type CiscoParserContext = {
+  rawText: string;
+  sourceFile: string;
+  hostname?: string;
+  facts: ImportFact[];
+};
+
+function normalizeCiscoInterfaceName(name: string): string {
+  return name
+    .replace(/^Gi(?=\d)/i, "GigabitEthernet")
+    .replace(/^Te(?=\d)/i, "TenGigabitEthernet")
+    .replace(/^Fa(?=\d)/i, "FastEthernet")
+    .replace(/^Eth(?=\d)/i, "Ethernet")
+    .trim();
+}
+
+function parseCiscoRunningConfigInterfaces({ rawText, sourceFile, hostname, facts }: CiscoParserContext) {
+  const interfaceBlocks = rawText.split(/\n(?=interface\s+)/i);
+
+  for (const block of interfaceBlocks) {
+    const interfaceName = block.match(/^interface\s+([^\n]+)/i)?.[1]?.trim();
+    if (!interfaceName) continue;
+
+    const normalizedInterface = normalizeCiscoInterfaceName(interfaceName);
+    const evidence = sanitizeConfigText(block.split("\n").slice(0, 12).join("\n"));
+
+    pushFact(facts, {
+      type: "interface",
+      vendor: "Cisco",
+      label: "Cisco running-config interface",
+      value: normalizedInterface,
+      device: hostname,
+      interfaceName: normalizedInterface,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: evidence
+    });
+
+    const description = block.match(/^\s*description\s+([^\n]+)/im)?.[1]?.trim();
+    const vrf = block.match(/^\s*(?:vrf|ip\s+vrf)\s+forwarding\s+(\S+)/im)?.[1];
+    const accessVlan = block.match(/^\s*switchport\s+access\s+vlan\s+(\d+)/im)?.[1];
+    const voiceVlan = block.match(/^\s*switchport\s+voice\s+vlan\s+(\d+)/im)?.[1];
+    const nativeVlan = block.match(/^\s*switchport\s+trunk\s+native\s+vlan\s+(\d+)/im)?.[1];
+    const allowedVlan = block.match(/^\s*switchport\s+trunk\s+allowed\s+vlan\s+([^\n]+)/im)?.[1]?.trim();
+    const switchportMode = block.match(/^\s*switchport\s+mode\s+(access|trunk|dynamic desirable|dynamic auto)/im)?.[1];
+    const channelGroup = block.match(/^\s*channel-group\s+(\d+)/im)?.[1];
+    const isShutdown = /^\s*shutdown\s*$/im.test(block);
+
+    if (description) {
+      pushFact(facts, {
+        type: "neighbor",
+        vendor: "Cisco",
+        label: "Interface description / possible peer",
+        value: description,
+        device: hostname,
+        interfaceName: normalizedInterface,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: `interface ${normalizedInterface}\n description ${description}`
+      });
+    }
+
+    if (vrf) {
+      pushFact(facts, {
+        type: "vrf",
+        vendor: "Cisco",
+        label: "Interface VRF",
+        value: vrf,
+        device: hostname,
+        interfaceName: normalizedInterface,
+        vrf,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: `interface ${normalizedInterface}\n vrf forwarding ${vrf}`
+      });
+    }
+
+    for (const [label, vlan] of [["Access VLAN", accessVlan], ["Voice VLAN", voiceVlan], ["Native trunk VLAN", nativeVlan]] as const) {
+      if (!vlan) continue;
+      pushFact(facts, {
+        type: "vlan",
+        vendor: "Cisco",
+        label,
+        value: vlan,
+        device: hostname,
+        interfaceName: normalizedInterface,
+        vlan,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: `interface ${normalizedInterface}\n ${label}: ${vlan}`
+      });
+    }
+
+    if (allowedVlan || switchportMode || channelGroup) {
+      pushFact(facts, {
+        type: "interface",
+        vendor: "Cisco",
+        label: "Cisco switching role",
+        value: [switchportMode ? `mode ${switchportMode}` : undefined, allowedVlan ? `allowed VLANs ${allowedVlan}` : undefined, channelGroup ? `port-channel ${channelGroup}` : undefined].filter(Boolean).join("; "),
+        device: hostname,
+        interfaceName: normalizedInterface,
+        vlan: accessVlan || nativeVlan,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: evidence
+      });
+    }
+
+    if (isShutdown) {
+      pushFact(facts, {
+        type: "warning",
+        vendor: "Cisco",
+        label: "Administratively shutdown interface",
+        value: normalizedInterface,
+        device: hostname,
+        interfaceName: normalizedInterface,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: `interface ${normalizedInterface}\n shutdown`
+      });
+    }
+
+    const ipMatches = block.matchAll(/^\s*ip\s+address\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)(?:\s+secondary)?/gim);
+    for (const ipMatch of ipMatches) {
+      const ip = ipMatch[1];
+      const cidr = derivePrefixFromIp(ip, ipMatch[2]);
+      if (!cidr) continue;
+      const sviVlan = normalizedInterface.toLowerCase().startsWith("vlan") ? normalizedInterface.replace(/\D+/g, "") : undefined;
+
+      pushFact(facts, {
+        type: "prefix",
+        vendor: "Cisco",
+        label: "Connected prefix from running-config",
+        value: cidr,
+        device: hostname,
+        interfaceName: normalizedInterface,
+        cidr,
+        prefix: cidr,
+        vrf,
+        vlan: sviVlan,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: `interface ${normalizedInterface}\n ip address ${ip} ${ipMatch[2]}`
+      });
+
+      pushFact(facts, {
+        type: "ip-address",
+        vendor: "Cisco",
+        label: "Interface IP address from running-config",
+        value: ip,
+        device: hostname,
+        interfaceName: normalizedInterface,
+        ip,
+        cidr,
+        prefix: cidr,
+        vrf,
+        vlan: sviVlan,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: `interface ${normalizedInterface}\n ip address ${ip} ${ipMatch[2]}`
+      });
+    }
+  }
+}
+
+function parseCiscoVlanConfig({ rawText, sourceFile, hostname, facts }: CiscoParserContext) {
+  const vlanBlocks = rawText.matchAll(/^vlan\s+(\d+)([\s\S]*?)(?=^!|^vlan\s+\d+|^interface\s+|^router\s+|$)/gim);
+  for (const match of vlanBlocks) {
+    const vlan = match[1];
+    const name = match[2].match(/^\s*name\s+([^\n]+)/im)?.[1]?.trim();
+    pushFact(facts, {
+      type: "vlan",
+      vendor: "Cisco",
+      label: name ? "VLAN from running-config" : "VLAN ID from running-config",
+      value: name ? `${vlan} ${name}` : vlan,
+      device: hostname,
+      vlan,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: `vlan ${vlan}${name ? `\n name ${name}` : ""}`
+    });
+  }
+}
+
+function parseCiscoRoutingConfig({ rawText, sourceFile, hostname, facts }: CiscoParserContext) {
+  const staticRoutes = rawText.matchAll(/^ip\s+route(?:\s+vrf\s+(\S+))?\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+(\S+)/gim);
+  for (const match of staticRoutes) {
+    const vrf = match[1];
+    const cidr = derivePrefixFromIp(match[2], match[3]);
+    pushFact(facts, {
+      type: "route",
+      vendor: "Cisco",
+      label: vrf ? "Static route in VRF" : "Static route",
+      value: `${cidr || `${match[2]} ${match[3]}`} via ${match[4]}`,
+      device: hostname,
+      vrf,
+      cidr: cidr || undefined,
+      prefix: cidr || undefined,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: match[0]
+    });
+  }
+
+  const ospfProcesses = rawText.matchAll(/^router\s+ospf\s+(\S+)([\s\S]*?)(?=^!|^router\s+|^interface\s+|$)/gim);
+  for (const match of ospfProcesses) {
+    const processId = match[1];
+    const routerId = match[2].match(/^\s*router-id\s+(\S+)/im)?.[1];
+    const vrf = match[2].match(/^\s*vrf\s+(\S+)/im)?.[1];
+    pushFact(facts, {
+      type: "route",
+      vendor: "Cisco",
+      label: "OSPF routing process",
+      value: `OSPF ${processId}${routerId ? ` router-id ${routerId}` : ""}`,
+      device: hostname,
+      vrf,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0].split("\n").slice(0, 14).join("\n"))
+    });
+
+    for (const network of match[2].matchAll(/^\s*network\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+area\s+(\S+)/gim)) {
+      pushFact(facts, {
+        type: "route",
+        vendor: "Cisco",
+        label: "OSPF network statement",
+        value: `${network[1]} wildcard ${network[2]} area ${network[3]}`,
+        device: hostname,
+        vrf,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: network[0]
+      });
+    }
+  }
+
+  const bgpProcesses = rawText.matchAll(/^router\s+bgp\s+(\d+)([\s\S]*?)(?=^!|^router\s+|^interface\s+|$)/gim);
+  for (const match of bgpProcesses) {
+    const asn = match[1];
+    pushFact(facts, {
+      type: "route",
+      vendor: "Cisco",
+      label: "BGP routing process",
+      value: `BGP AS ${asn}`,
+      device: hostname,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0].split("\n").slice(0, 16).join("\n"))
+    });
+
+    for (const neighbor of match[2].matchAll(/^\s*neighbor\s+(\d+\.\d+\.\d+\.\d+)\s+remote-as\s+(\d+)/gim)) {
+      pushFact(facts, {
+        type: "neighbor",
+        vendor: "Cisco",
+        label: "BGP neighbor from running-config",
+        value: `${neighbor[1]} remote-as ${neighbor[2]}`,
+        device: hostname,
+        ip: neighbor[1],
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: neighbor[0]
+      });
+    }
+  }
+}
+
+function parseCiscoShowOutputs({ rawText, sourceFile, hostname, facts }: CiscoParserContext) {
+  const lines = rawText.split("\n");
+
+  const versionModel = rawText.match(/Cisco\s+(?:IOS|IOS XE)[\s\S]*?\n(?:.*?)(?:processor|bytes of memory)/i)?.[0] || rawText.match(/cisco\s+([A-Za-z0-9-]+)\s+\(/i)?.[0];
+  const serial = rawText.match(/System serial number\s*:\s*(\S+)/i)?.[1] || rawText.match(/Processor board ID\s+(\S+)/i)?.[1];
+  if (versionModel || serial) {
+    pushFact(facts, {
+      type: "device",
+      vendor: "Cisco",
+      label: "Cisco platform evidence",
+      value: [versionModel ? versionModel.replace(/\s+/g, " ").slice(0, 96) : undefined, serial ? `serial ${serial}` : undefined].filter(Boolean).join("; "),
+      device: hostname,
+      confidence: "medium",
+      sourceFile,
+      sanitizedEvidence: [versionModel, serial ? `System serial number: ${serial}` : undefined].filter(Boolean).join("\n")
+    });
+  }
+
+  for (const line of lines) {
+    const showIpBrief = line.match(/^\s*([A-Za-z][A-Za-z0-9/_.-]+)\s+(\d+\.\d+\.\d+\.\d+|unassigned)\s+\S+\s+\S+\s+(administratively down|up|down)\s+(up|down)/i);
+    if (showIpBrief) {
+      const interfaceName = normalizeCiscoInterfaceName(showIpBrief[1]);
+      pushFact(facts, {
+        type: "interface",
+        vendor: "Cisco",
+        label: "show ip interface brief status",
+        value: `${interfaceName} ${showIpBrief[3]}/${showIpBrief[4]}`,
+        device: hostname,
+        interfaceName,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+
+      if (showIpBrief[2] !== "unassigned") {
+        pushFact(facts, {
+          type: "ip-address",
+          vendor: "Cisco",
+          label: "show ip interface brief address",
+          value: showIpBrief[2],
+          device: hostname,
+          interfaceName,
+          ip: showIpBrief[2],
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: line.trim()
+        });
+      }
+    }
+
+    const interfaceStatus = line.match(/^\s*([A-Za-z][A-Za-z0-9/_.-]+)\s+(.{0,24}?)\s+(connected|notconnect|disabled|err-disabled|sfpAbsent|inactive)\s+(\S+)\s+(auto|a-full|full|half|\S+)\s+(auto|\d+|a-\d+|\S+)\s+(.+)$/i);
+    if (interfaceStatus && !/^Port\s+Name\s+Status/i.test(line)) {
+      const interfaceName = normalizeCiscoInterfaceName(interfaceStatus[1]);
+      const vlan = /^\d+$/.test(interfaceStatus[4]) ? interfaceStatus[4] : undefined;
+      pushFact(facts, {
+        type: "interface",
+        vendor: "Cisco",
+        label: "show interfaces status port",
+        value: `${interfaceName} ${interfaceStatus[3]} vlan ${interfaceStatus[4]} ${interfaceStatus[7].trim()}`,
+        device: hostname,
+        interfaceName,
+        vlan,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      if (vlan) {
+        pushFact(facts, {
+          type: "vlan",
+          vendor: "Cisco",
+          label: "Access VLAN from interface status",
+          value: vlan,
+          device: hostname,
+          interfaceName,
+          vlan,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: line.trim()
+        });
+      }
+    }
+
+    const vlanBrief = line.match(/^\s*(\d+)\s+([A-Za-z0-9_.-]+)\s+(active|suspended|act\/lshut)(?:\s+(.+))?/i);
+    if (vlanBrief) {
+      pushFact(facts, {
+        type: "vlan",
+        vendor: "Cisco",
+        label: "VLAN from show vlan brief",
+        value: `${vlanBrief[1]} ${vlanBrief[2]}`,
+        device: hostname,
+        vlan: vlanBrief[1],
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      if (vlanBrief[4]) {
+        for (const iface of vlanBrief[4].split(/,\s*/).filter(Boolean)) {
+          pushFact(facts, {
+            type: "interface",
+            vendor: "Cisco",
+            label: "VLAN membership from show vlan brief",
+            value: `${normalizeCiscoInterfaceName(iface)} in VLAN ${vlanBrief[1]}`,
+            device: hostname,
+            interfaceName: normalizeCiscoInterfaceName(iface),
+            vlan: vlanBrief[1],
+            confidence: "medium",
+            sourceFile,
+            sanitizedEvidence: line.trim()
+          });
+        }
+      }
+    }
+
+    const trunkLine = line.match(/^\s*([A-Za-z][A-Za-z0-9/_.-]+)\s+(on|auto|desirable|nonegotiate)\s+(\S+)\s+(trunking|not-trunking)\s+(\d+)/i);
+    if (trunkLine) {
+      pushFact(facts, {
+        type: "interface",
+        vendor: "Cisco",
+        label: "show interfaces trunk",
+        value: `${normalizeCiscoInterfaceName(trunkLine[1])} ${trunkLine[4]} native VLAN ${trunkLine[5]}`,
+        device: hostname,
+        interfaceName: normalizeCiscoInterfaceName(trunkLine[1]),
+        vlan: trunkLine[5],
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+    }
+
+    const routeLine = line.match(/^\s*(O|IA|E1|E2|B|D|EX|C|L|S|R)\*?\s+(\d+\.\d+\.\d+\.\d+\/\d+)(?:\s+\[.*?\])?(?:\s+via\s+(\d+\.\d+\.\d+\.\d+))?(?:,\s*([^,\n]+))?/i);
+    if (routeLine) {
+      pushFact(facts, {
+        type: "route",
+        vendor: "Cisco",
+        label: "Route from show ip route",
+        value: `${routeLine[1]} ${routeLine[2]}${routeLine[3] ? ` via ${routeLine[3]}` : ""}`,
+        device: hostname,
+        cidr: routeLine[2],
+        prefix: routeLine[2],
+        ip: routeLine[3],
+        confidence: routeLine[1] === "C" || routeLine[1] === "L" ? "high" : "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+    }
+
+    const ospfNeighbor = line.match(/^\s*(\d+\.\d+\.\d+\.\d+)\s+\d+\s+([A-Z/]+)\s+\S+\s+(\d+\.\d+\.\d+\.\d+)\s+([A-Za-z0-9/_.-]+)/i);
+    if (ospfNeighbor && !/Neighbor\s+ID/i.test(line)) {
+      pushFact(facts, {
+        type: "neighbor",
+        vendor: "Cisco",
+        label: "OSPF neighbor",
+        value: `${ospfNeighbor[1]} ${ospfNeighbor[2]} via ${ospfNeighbor[4]}`,
+        device: hostname,
+        interfaceName: normalizeCiscoInterfaceName(ospfNeighbor[4]),
+        ip: ospfNeighbor[3],
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+    }
+
+    const bgpNeighbor = line.match(/^\s*(\d+\.\d+\.\d+\.\d+)\s+\d+\s+(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\S+\s+(\S+)/i);
+    if (bgpNeighbor && !/Neighbor\s+V/i.test(line)) {
+      pushFact(facts, {
+        type: "neighbor",
+        vendor: "Cisco",
+        label: "BGP neighbor summary",
+        value: `${bgpNeighbor[1]} remote-as ${bgpNeighbor[2]} state/pfx ${bgpNeighbor[3]}`,
+        device: hostname,
+        ip: bgpNeighbor[1],
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+    }
+  }
+}
+
+function parseCiscoDiscoveryNeighbors({ rawText, sourceFile, hostname, facts }: CiscoParserContext) {
+  const cdpBlocks = rawText.split(/-{5,}|\n(?=Device ID\s*:)/i).filter((block) => /Device ID\s*:/i.test(block));
+  for (const block of cdpBlocks) {
+    const remoteDevice = block.match(/Device ID\s*:\s*([^\n]+)/i)?.[1]?.trim();
+    const localInterface = block.match(/Interface\s*:\s*([^,\n]+),\s*Port ID \(outgoing port\)\s*:\s*([^\n]+)/i);
+    const platform = block.match(/Platform\s*:\s*([^,\n]+)/i)?.[1]?.trim();
+    const managementIp = block.match(/IP address\s*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (!remoteDevice || !localInterface) continue;
+
+    pushFact(facts, {
+      type: "neighbor",
+      vendor: "Cisco",
+      label: "CDP topology link",
+      value: `${hostname || "local"}:${normalizeCiscoInterfaceName(localInterface[1].trim())} -> ${remoteDevice}:${normalizeCiscoInterfaceName(localInterface[2].trim())}`,
+      device: hostname,
+      interfaceName: normalizeCiscoInterfaceName(localInterface[1].trim()),
+      ip: managementIp,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText([`Device ID: ${remoteDevice}`, `Interface: ${localInterface[1].trim()}`, `Port ID: ${localInterface[2].trim()}`, platform ? `Platform: ${platform}` : undefined, managementIp ? `IP address: ${managementIp}` : undefined].filter(Boolean).join("\n"))
+    });
+  }
+
+  const lldpBlocks = rawText.split(/-{5,}|\n(?=Local Intf\s*:|System Name\s*:)/i).filter((block) => /System Name\s*:|Local Intf\s*:/i.test(block));
+  for (const block of lldpBlocks) {
+    const remoteDevice = block.match(/System Name\s*:\s*([^\n]+)/i)?.[1]?.trim() || block.match(/System Description\s*:\s*([^\n]+)/i)?.[1]?.trim();
+    const localInterface = block.match(/Local Intf\s*:\s*([^\n]+)/i)?.[1]?.trim();
+    const remotePort = block.match(/Port id\s*:\s*([^\n]+)/i)?.[1]?.trim();
+    if (!remoteDevice || !localInterface || !remotePort) continue;
+
+    pushFact(facts, {
+      type: "neighbor",
+      vendor: "Cisco",
+      label: "LLDP topology link",
+      value: `${hostname || "local"}:${normalizeCiscoInterfaceName(localInterface)} -> ${remoteDevice}:${normalizeCiscoInterfaceName(remotePort)}`,
+      device: hostname,
+      interfaceName: normalizeCiscoInterfaceName(localInterface),
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText([`System Name: ${remoteDevice}`, `Local Intf: ${localInterface}`, `Port id: ${remotePort}`].join("\n"))
+    });
+  }
+}
+
+function parseCiscoFacts(rawText: string, sourceFile: string, hostname: string | undefined, facts: ImportFact[]) {
+  const context = { rawText, sourceFile, hostname, facts };
+  parseCiscoRunningConfigInterfaces(context);
+  parseCiscoVlanConfig(context);
+  parseCiscoRoutingConfig(context);
+  parseCiscoShowOutputs(context);
+  parseCiscoDiscoveryNeighbors(context);
+}
+
 
 export function parseImportedConfig(rawText: string, sourceFile = "pasted-config", forcedVendor?: VendorKind): ImportJob {
   const sanitized = sanitizeConfigText(rawText);
@@ -348,144 +846,7 @@ export function parseImportedConfig(rawText: string, sourceFile = "pasted-config
   }
 
   if (vendor === "Cisco" || vendor === "Unknown") {
-    const interfaceBlocks = rawText.split(/\n(?=interface\s+)/i);
-    for (const block of interfaceBlocks) {
-      const interfaceName = block.match(/^interface\s+([^\n]+)/i)?.[1]?.trim();
-      if (!interfaceName) continue;
-
-      pushFact(facts, {
-        type: "interface",
-        vendor: "Cisco",
-        label: "Cisco interface",
-        value: interfaceName,
-        device: hostname,
-        interfaceName,
-        confidence: "high",
-        sourceFile,
-        sanitizedEvidence: sanitizeConfigText(block.split("\n").slice(0, 8).join("\n"))
-      });
-
-      const description = block.match(/description\s+([^\n]+)/i)?.[1]?.trim();
-      const vlanAccess = block.match(/switchport\s+access\s+vlan\s+(\d+)/i)?.[1];
-      const nativeVlan = block.match(/switchport\s+trunk\s+native\s+vlan\s+(\d+)/i)?.[1];
-      const ipMatch = block.match(/ip\s+address\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)/i);
-      const vrf = block.match(/vrf\s+forwarding\s+(\S+)/i)?.[1] || block.match(/ip\s+vrf\s+forwarding\s+(\S+)/i)?.[1];
-
-      if (description) {
-        pushFact(facts, {
-          type: "neighbor",
-          vendor: "Cisco",
-          label: "Interface description / possible peer",
-          value: description,
-          device: hostname,
-          interfaceName,
-          confidence: "medium",
-          sourceFile,
-          sanitizedEvidence: `interface ${interfaceName}\n description ${description}`
-        });
-      }
-
-      if (vlanAccess || nativeVlan) {
-        const vlan = vlanAccess || nativeVlan || "unknown";
-        pushFact(facts, {
-          type: "vlan",
-          vendor: "Cisco",
-          label: vlanAccess ? "Access VLAN" : "Native VLAN",
-          value: vlan,
-          device: hostname,
-          interfaceName,
-          vlan,
-          confidence: "high",
-          sourceFile,
-          sanitizedEvidence: `interface ${interfaceName}\n switchport vlan ${vlan}`
-        });
-      }
-
-      if (vrf) {
-        pushFact(facts, {
-          type: "vrf",
-          vendor: "Cisco",
-          label: "Interface VRF",
-          value: vrf,
-          device: hostname,
-          interfaceName,
-          vrf,
-          confidence: "high",
-          sourceFile,
-          sanitizedEvidence: `interface ${interfaceName}\n vrf forwarding ${vrf}`
-        });
-      }
-
-      if (ipMatch) {
-        const ip = ipMatch[1];
-        const cidr = derivePrefixFromIp(ip, ipMatch[2]);
-        if (cidr) {
-          pushFact(facts, {
-            type: "prefix",
-            vendor: "Cisco",
-            label: "Connected prefix",
-            value: cidr,
-            device: hostname,
-            interfaceName,
-            cidr,
-            prefix: cidr,
-            vrf,
-            vlan: interfaceName.toLowerCase().startsWith("vlan") ? interfaceName.replace(/\D+/g, "") : undefined,
-            confidence: "high",
-            sourceFile,
-            sanitizedEvidence: `interface ${interfaceName}\n ip address ${ip} ${ipMatch[2]}`
-          });
-          pushFact(facts, {
-            type: "ip-address",
-            vendor: "Cisco",
-            label: "Interface IP address",
-            value: ip,
-            device: hostname,
-            interfaceName,
-            ip,
-            cidr,
-            prefix: cidr,
-            vrf,
-            confidence: "high",
-            sourceFile,
-            sanitizedEvidence: `interface ${interfaceName}\n ip address ${ip} ${ipMatch[2]}`
-          });
-        }
-      }
-    }
-
-    for (const line of rawText.split("\n")) {
-      const showIpBrief = line.match(/^\s*(\S+)\s+(\d+\.\d+\.\d+\.\d+)\s+\S+\s+\S+\s+\S+\s+(up|down|administratively down)/i);
-      if (showIpBrief) {
-        pushFact(facts, {
-          type: "ip-address",
-          vendor: "Cisco",
-          label: "show ip interface brief address",
-          value: showIpBrief[2],
-          device: hostname,
-          interfaceName: showIpBrief[1],
-          ip: showIpBrief[2],
-          confidence: "medium",
-          sourceFile,
-          sanitizedEvidence: line.trim()
-        });
-      }
-
-      const vlanBrief = line.match(/^\s*(\d+)\s+([A-Za-z0-9_.-]+)\s+(active|suspended|act\/lshut)/i);
-      if (vlanBrief) {
-        pushFact(facts, {
-          type: "vlan",
-          vendor: "Cisco",
-          label: "VLAN from vlan brief",
-          value: `${vlanBrief[1]} ${vlanBrief[2]}`,
-          device: hostname,
-          vlan: vlanBrief[1],
-          confidence: "medium",
-          sourceFile,
-          sanitizedEvidence: line.trim()
-        });
-      }
-    }
+    parseCiscoFacts(rawText, sourceFile, hostname, facts);
   }
 
   if (vendor === "Fortinet" || vendor === "Unknown") {

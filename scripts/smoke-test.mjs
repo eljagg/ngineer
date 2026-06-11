@@ -35,7 +35,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.7") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.8") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -48,7 +48,7 @@ for (const dependency of ["@xyflow/react", "elkjs"]) {
 }
 
 const networkFlowCanvas = readFileSync("src/components/NetworkFlowCanvas.tsx", "utf8");
-for (const marker of ["ReactFlow", "ELK", "getLayoutedNodes", "NetworkDeviceNode", "NetworkLinkEdge", "Auto layout", "Add draft device"]) {
+for (const marker of ["ReactFlow", "ELK", "getLayoutedNodes", "NetworkDeviceNode", "NetworkLinkEdge", "Auto layout", "Add draft device", "portAnchors", "rf-port-aware-node"]) {
   if (!networkFlowCanvas.includes(marker)) {
     console.error(`NetworkFlowCanvas is missing expected interactive marker: ${marker}`);
     process.exit(1);
@@ -76,11 +76,11 @@ for (const marker of ["Upload files", "Commit to Neo4j", "Apply approved locally
 }
 
 const ipamModel = readFileSync("src/lib/ipam-model.ts", "utf8");
-for (const marker of ["parseImportedConfig", "sanitizeConfigText", "findIpamConflicts", "applyApprovedImportFacts", "detectVendor"]) {
+for (const marker of ["parseImportedConfig", "sanitizeConfigText", "findIpamConflicts", "applyApprovedImportFacts", "detectVendor", "parseCiscoFacts", "CDP topology link", "show interfaces status", "BGP neighbor summary"]) {
   if (!ipamModel.includes(marker)) {
     console.error(`IPAM model is missing expected parser marker: ${marker}`);
     process.exit(1);
   }
 }
 
-console.log("Smoke test passed: NGINEER v0.1.7 full IPAM foundation and import staging files are present.");
+console.log("Smoke test passed: NGINEER v0.1.8 Cisco parser and port-aware topology files are present.");
