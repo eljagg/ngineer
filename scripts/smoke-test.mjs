@@ -99,4 +99,4 @@ for (const marker of [
   }
 }
 
-console.log("Smoke test passed: NGINEER v0.1.9 Fortinet parser files are present.");
+console.log("Smoke test passed: NGINEER v0.1.9.1 Fortinet parser type-safety hotfix files are present.");

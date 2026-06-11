@@ -837,9 +837,10 @@ type FortinetParserContext = {
   facts: ImportFact[];
 };
 
-function normalizeFortinetValue(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return value.trim().replace(/^"|"$/g, "");
+function normalizeFortinetValue(value: string | null | undefined): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  const trimmed = value.trim().replace(/^"|"$/g, "");
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function splitFortinetList(value: string | undefined): string[] {
@@ -1325,12 +1326,12 @@ function pushFortinetRouteFacts({ rawText, sourceFile, hostname, facts }: Fortin
 function pushFortinetDhcpFacts({ rawText, sourceFile, hostname, facts }: FortinetParserContext) {
   for (const section of getFortinetConfigSections(rawText, "config system dhcp server")) {
     for (const { name: serverId, body } of parseFortinetEditBlocks(section)) {
-      const interfaceName = getFortinetSetValue(body, "interface");
-      const gateway = getFortinetSetValue(body, "default-gateway");
-      const netmask = getFortinetSetValue(body, "netmask");
-      const startIp = getFortinetSetValue(body, "start-ip");
-      const endIp = getFortinetSetValue(body, "end-ip");
-      const dnsService = getFortinetSetValue(body, "dns-service");
+      const interfaceName = normalizeFortinetValue(getFortinetSetValue(body, "interface"));
+      const gateway = normalizeFortinetValue(getFortinetSetValue(body, "default-gateway"));
+      const netmask = normalizeFortinetValue(getFortinetSetValue(body, "netmask"));
+      const startIp = normalizeFortinetValue(getFortinetSetValue(body, "start-ip"));
+      const endIp = normalizeFortinetValue(getFortinetSetValue(body, "end-ip"));
+      const dnsService = normalizeFortinetValue(getFortinetSetValue(body, "dns-service"));
       const cidr = gateway && netmask ? derivePrefixFromIp(gateway, netmask) : undefined;
 
       pushFact(facts, {
