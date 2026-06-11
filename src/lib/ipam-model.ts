@@ -1332,7 +1332,7 @@ function pushFortinetDhcpFacts({ rawText, sourceFile, hostname, facts }: Fortine
       const startIp = normalizeFortinetValue(getFortinetSetValue(body, "start-ip"));
       const endIp = normalizeFortinetValue(getFortinetSetValue(body, "end-ip"));
       const dnsService = normalizeFortinetValue(getFortinetSetValue(body, "dns-service"));
-      const cidr = gateway && netmask ? derivePrefixFromIp(gateway, netmask) : undefined;
+      const cidr = gateway && netmask ? normalizeFortinetValue(derivePrefixFromIp(gateway, netmask)) : undefined;
 
       pushFact(facts, {
         type: "firewall-policy",
