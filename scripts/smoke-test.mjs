@@ -35,7 +35,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.8") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.9") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -83,4 +83,20 @@ for (const marker of ["parseImportedConfig", "sanitizeConfigText", "findIpamConf
   }
 }
 
-console.log("Smoke test passed: NGINEER v0.1.8 Cisco parser and port-aware topology files are present.");
+for (const marker of [
+  "parseFortinetFacts",
+  "config system interface",
+  "Fortinet firewall policy",
+  "Fortinet static route",
+  "Fortinet address object subnet",
+  "Fortinet BGP neighbor",
+  "Fortinet DHCP server",
+  "Fortinet IPsec VPN peer"
+]) {
+  if (!ipamModel.includes(marker)) {
+    console.error(`IPAM model is missing expected Fortinet parser marker: ${marker}`);
+    process.exit(1);
+  }
+}
+
+console.log("Smoke test passed: NGINEER v0.1.9 Fortinet parser files are present.");

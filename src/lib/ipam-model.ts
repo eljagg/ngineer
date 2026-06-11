@@ -121,6 +121,10 @@ const secretPatterns = [
   /(tacacs-server\s+key\s+)(\S+)/gi,
   /(pre-shared-key\s+)(\S+)/gi,
   /(set\s+psksecret\s+)(\S+)/gi,
+  /(set\s+passwd\s+)(\S+)/gi,
+  /(set\s+password\s+)(\S+)/gi,
+  /(set\s+key\s+)(\S+)/gi,
+  /(set\s+secret\s+)(\S+)/gi,
   /(api[-_ ]?key\s*[=:]\s*)(\S+)/gi,
   /(token\s*[=:]\s*)(\S+)/gi
 ];
@@ -826,50 +830,160 @@ function parseCiscoFacts(rawText: string, sourceFile: string, hostname: string |
 }
 
 
-export function parseImportedConfig(rawText: string, sourceFile = "pasted-config", forcedVendor?: VendorKind): ImportJob {
-  const sanitized = sanitizeConfigText(rawText);
-  const vendor = forcedVendor && forcedVendor !== "Unknown" ? forcedVendor : detectVendor(rawText, sourceFile);
-  const facts: ImportFact[] = [];
-  const hostname = extractHostname(rawText, vendor);
+type FortinetParserContext = {
+  rawText: string;
+  sourceFile: string;
+  hostname?: string;
+  facts: ImportFact[];
+};
 
-  if (hostname) {
-    pushFact(facts, {
-      type: "device",
-      vendor,
-      label: "Device hostname",
-      value: hostname,
-      device: hostname,
-      confidence: "high",
-      sourceFile,
-      sanitizedEvidence: `hostname ${hostname}`
-    });
+function normalizeFortinetValue(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value.trim().replace(/^"|"$/g, "");
+}
+
+function splitFortinetList(value: string | undefined): string[] {
+  if (!value) return [];
+  const matches = [...value.matchAll(/"([^"]+)"|(\S+)/g)];
+  return matches.map((match) => normalizeFortinetValue(match[1] || match[2])).filter(Boolean) as string[];
+}
+
+function getFortinetSetValue(block: string, key: string): string | undefined {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = block.match(new RegExp(`^\\s*set\\s+${escapedKey}\\s+(.+)$`, "im"));
+  return normalizeFortinetValue(match?.[1]);
+}
+
+function getFortinetSetList(block: string, key: string): string[] {
+  return splitFortinetList(getFortinetSetValue(block, key));
+}
+
+function getFortinetConfigSections(rawText: string, header: string): string[] {
+  const sections: string[] = [];
+  const lines = rawText.split(/\r?\n/);
+  const headerLower = header.toLowerCase();
+  let collecting = false;
+  let depth = 0;
+  let current: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const lower = trimmed.toLowerCase();
+
+    if (!collecting && lower === headerLower) {
+      collecting = true;
+      depth = 1;
+      current = [];
+      continue;
+    }
+
+    if (!collecting) continue;
+
+    if (/^config\s+/i.test(trimmed)) {
+      depth += 1;
+      current.push(line);
+      continue;
+    }
+
+    if (/^end$/i.test(trimmed)) {
+      depth -= 1;
+      if (depth === 0) {
+        sections.push(current.join("\n"));
+        collecting = false;
+        current = [];
+        continue;
+      }
+    }
+
+    current.push(line);
   }
 
-  if (vendor === "Cisco" || vendor === "Unknown") {
-    parseCiscoFacts(rawText, sourceFile, hostname, facts);
-  }
+  return sections;
+}
 
-  if (vendor === "Fortinet" || vendor === "Unknown") {
-    const interfaceBlocks = rawText.split(/\n\s*edit\s+"/i);
-    for (const block of interfaceBlocks) {
-      const firstLine = block.split("\n")[0];
-      const interfaceName = firstLine.replace(/"/g, "").trim();
-      const ipMatch = block.match(/set\s+ip\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)/i);
-      const alias = block.match(/set\s+alias\s+"([^"]+)"/i)?.[1];
-      const vlan = block.match(/set\s+vlanid\s+(\d+)/i)?.[1];
-      if (!interfaceName || (!ipMatch && !vlan && !alias)) continue;
+function parseFortinetEditBlocks(section: string): Array<{ name: string; body: string }> {
+  const blocks: Array<{ name: string; body: string }> = [];
+  const pattern = /^\s*edit\s+(?:"([^"]+)"|(\S+))\s*$([\s\S]*?)(?=^\s*next\s*$|^\s*edit\s+(?:"[^"]+"|\S+)\s*$|\s*$)/gim;
+  for (const match of section.matchAll(pattern)) {
+    const name = normalizeFortinetValue(match[1] || match[2]);
+    if (!name) continue;
+    blocks.push({ name, body: match[3] || "" });
+  }
+  return blocks;
+}
+
+function pushFortinetInterfaceFacts({ rawText, sourceFile, hostname, facts }: FortinetParserContext) {
+  for (const section of getFortinetConfigSections(rawText, "config system interface")) {
+    for (const { name: interfaceName, body } of parseFortinetEditBlocks(section)) {
+      const ipMatch = body.match(/^\s*set\s+ip\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)/im);
+      const alias = getFortinetSetValue(body, "alias");
+      const role = getFortinetSetValue(body, "role");
+      const type = getFortinetSetValue(body, "type");
+      const parentInterface = getFortinetSetValue(body, "interface");
+      const vlan = getFortinetSetValue(body, "vlanid");
+      const vdom = getFortinetSetValue(body, "vdom");
+      const vrfNumber = getFortinetSetValue(body, "vrf");
+      const status = getFortinetSetValue(body, "status");
+      const allowAccess = getFortinetSetValue(body, "allowaccess");
+      const evidence = sanitizeConfigText([`edit "${interfaceName}"`, ...body.split("\n").slice(0, 12)].join("\n"));
 
       pushFact(facts, {
         type: "interface",
         vendor: "Fortinet",
-        label: "Fortinet interface",
-        value: interfaceName,
+        label: "Fortinet system interface",
+        value: [interfaceName, type ? `type ${type}` : undefined, role ? `role ${role}` : undefined, alias ? `alias ${alias}` : undefined].filter(Boolean).join("; "),
         device: hostname,
         interfaceName,
-        confidence: "medium",
+        vlan,
+        confidence: "high",
         sourceFile,
-        sanitizedEvidence: sanitizeConfigText(block.split("\n").slice(0, 8).join("\n"))
+        sanitizedEvidence: evidence
       });
+
+      if (parentInterface || type === "vlan" || type === "aggregate" || type === "tunnel") {
+        pushFact(facts, {
+          type: "interface",
+          vendor: "Fortinet",
+          label: "Fortinet logical interface relationship",
+          value: `${interfaceName}${parentInterface ? ` parent ${parentInterface}` : ""}${type ? ` type ${type}` : ""}`,
+          device: hostname,
+          interfaceName,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: evidence
+        });
+      }
+
+      if (vdom) {
+        pushFact(facts, {
+          type: "vrf",
+          vendor: "Fortinet",
+          label: "Fortinet VDOM routing context",
+          value: vdom,
+          device: hostname,
+          interfaceName,
+          vrf: vdom,
+          confidence: "high",
+          sourceFile,
+          sanitizedEvidence: `edit "${interfaceName}"\n set vdom "${vdom}"`
+        });
+      }
+
+      if (vrfNumber) {
+        const vrf = `VRF-${vrfNumber}`;
+        pushFact(facts, {
+          type: "vrf",
+          vendor: "Fortinet",
+          label: "Fortinet interface VRF",
+          value: vrf,
+          device: hostname,
+          interfaceName,
+          vrf,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: `edit "${interfaceName}"\n set vrf ${vrfNumber}`
+        });
+      }
 
       if (vlan) {
         pushFact(facts, {
@@ -920,21 +1034,405 @@ export function parseImportedConfig(rawText: string, sourceFile = "pasted-config
           });
         }
       }
-    }
 
-    const policyMatches = rawText.matchAll(/edit\s+(\d+)[\s\S]*?set\s+srcintf\s+([^\n]+)[\s\S]*?set\s+dstintf\s+([^\n]+)[\s\S]*?set\s+action\s+(accept|deny)/gi);
-    for (const match of policyMatches) {
+      if (status === "down") {
+        pushFact(facts, {
+          type: "warning",
+          vendor: "Fortinet",
+          label: "Fortinet interface disabled",
+          value: `${interfaceName} is administratively down`,
+          device: hostname,
+          interfaceName,
+          confidence: "high",
+          sourceFile,
+          sanitizedEvidence: `edit "${interfaceName}"\n set status down`
+        });
+      }
+
+      if (allowAccess && /\b(http|https|ssh|telnet|snmp)\b/i.test(allowAccess)) {
+        pushFact(facts, {
+          type: "warning",
+          vendor: "Fortinet",
+          label: "Fortinet management access enabled",
+          value: `${interfaceName}: ${allowAccess}`,
+          device: hostname,
+          interfaceName,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: `edit "${interfaceName}"\n set allowaccess ${allowAccess}`
+        });
+      }
+    }
+  }
+}
+
+function pushFortinetZoneFacts({ rawText, sourceFile, hostname, facts }: FortinetParserContext) {
+  for (const section of getFortinetConfigSections(rawText, "config system zone")) {
+    for (const { name: zoneName, body } of parseFortinetEditBlocks(section)) {
+      const members = getFortinetSetList(body, "interface");
+      if (members.length === 0) continue;
+      pushFact(facts, {
+        type: "interface",
+        vendor: "Fortinet",
+        label: "Fortinet zone membership",
+        value: `${zoneName}: ${members.join(", ")}`,
+        device: hostname,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: `edit "${zoneName}"\n set interface ${members.map((item) => `"${item}"`).join(" ")}`
+      });
+    }
+  }
+}
+
+function pushFortinetAddressFacts({ rawText, sourceFile, hostname, facts }: FortinetParserContext) {
+  for (const section of getFortinetConfigSections(rawText, "config firewall address")) {
+    for (const { name: objectName, body } of parseFortinetEditBlocks(section)) {
+      const subnet = body.match(/^\s*set\s+subnet\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)/im);
+      const startIp = getFortinetSetValue(body, "start-ip");
+      const endIp = getFortinetSetValue(body, "end-ip");
+      const fqdn = getFortinetSetValue(body, "fqdn");
+
+      if (subnet) {
+        const cidr = derivePrefixFromIp(subnet[1], subnet[2]);
+        if (cidr) {
+          pushFact(facts, {
+            type: "prefix",
+            vendor: "Fortinet",
+            label: "Fortinet address object subnet",
+            value: `${objectName} ${cidr}`,
+            device: hostname,
+            cidr,
+            prefix: cidr,
+            confidence: "medium",
+            sourceFile,
+            sanitizedEvidence: `edit "${objectName}"\n set subnet ${subnet[1]} ${subnet[2]}`
+          });
+        }
+      }
+
+      for (const [label, ip] of [["Fortinet address range start", startIp], ["Fortinet address range end", endIp]] as const) {
+        if (!ip) continue;
+        pushFact(facts, {
+          type: "ip-address",
+          vendor: "Fortinet",
+          label,
+          value: `${objectName} ${ip}`,
+          device: hostname,
+          ip,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: `edit "${objectName}"\n set ${label.includes("start") ? "start-ip" : "end-ip"} ${ip}`
+        });
+      }
+
+      if (fqdn) {
+        pushFact(facts, {
+          type: "firewall-policy",
+          vendor: "Fortinet",
+          label: "Fortinet FQDN address object",
+          value: `${objectName} -> ${fqdn}`,
+          device: hostname,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: `edit "${objectName}"\n set fqdn "${fqdn}"`
+        });
+      }
+    }
+  }
+
+  for (const section of getFortinetConfigSections(rawText, "config firewall addrgrp")) {
+    for (const { name: groupName, body } of parseFortinetEditBlocks(section)) {
+      const members = getFortinetSetList(body, "member");
+      if (members.length === 0) continue;
       pushFact(facts, {
         type: "firewall-policy",
         vendor: "Fortinet",
-        label: "Firewall policy",
-        value: `policy ${match[1]} ${match[4]}`,
+        label: "Fortinet address group",
+        value: `${groupName}: ${members.join(", ")}`,
         device: hostname,
         confidence: "medium",
         sourceFile,
-        sanitizedEvidence: `policy ${match[1]} ${match[2].trim()} -> ${match[3].trim()} ${match[4]}`
+        sanitizedEvidence: `edit "${groupName}"\n set member ${members.map((member) => `"${member}"`).join(" ")}`
       });
     }
+  }
+}
+
+function pushFortinetPolicyFacts({ rawText, sourceFile, hostname, facts }: FortinetParserContext) {
+  for (const section of getFortinetConfigSections(rawText, "config firewall policy")) {
+    for (const { name: policyId, body } of parseFortinetEditBlocks(section)) {
+      const name = getFortinetSetValue(body, "name");
+      const srcIntf = getFortinetSetList(body, "srcintf");
+      const dstIntf = getFortinetSetList(body, "dstintf");
+      const srcAddr = getFortinetSetList(body, "srcaddr");
+      const dstAddr = getFortinetSetList(body, "dstaddr");
+      const service = getFortinetSetList(body, "service");
+      const action = getFortinetSetValue(body, "action") || "accept";
+      const nat = getFortinetSetValue(body, "nat");
+      const status = getFortinetSetValue(body, "status");
+      const schedule = getFortinetSetValue(body, "schedule");
+      const evidence = sanitizeConfigText([`edit ${policyId}`, ...body.split("\n").slice(0, 18)].join("\n"));
+
+      if (srcIntf.length === 0 && dstIntf.length === 0 && srcAddr.length === 0 && dstAddr.length === 0) continue;
+
+      pushFact(facts, {
+        type: "firewall-policy",
+        vendor: "Fortinet",
+        label: "Fortinet firewall policy",
+        value: [
+          `policy ${policyId}`,
+          name ? `name ${name}` : undefined,
+          `${srcIntf.join("|") || "any-src-intf"} -> ${dstIntf.join("|") || "any-dst-intf"}`,
+          `${srcAddr.join("|") || "all"} -> ${dstAddr.join("|") || "all"}`,
+          `action ${action}`,
+          service.length ? `service ${service.join("|")}` : undefined,
+          nat === "enable" ? "NAT enabled" : undefined,
+          schedule ? `schedule ${schedule}` : undefined
+        ].filter(Boolean).join("; "),
+        device: hostname,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: evidence
+      });
+
+      if (status === "disable") {
+        pushFact(facts, {
+          type: "warning",
+          vendor: "Fortinet",
+          label: "Fortinet disabled firewall policy",
+          value: `policy ${policyId}${name ? ` ${name}` : ""}`,
+          device: hostname,
+          confidence: "high",
+          sourceFile,
+          sanitizedEvidence: `edit ${policyId}\n set status disable`
+        });
+      }
+
+      if (action === "accept" && (srcAddr.includes("all") || srcAddr.includes("ALL")) && (dstAddr.includes("all") || dstAddr.includes("ALL")) && (service.includes("ALL") || service.includes("all"))) {
+        pushFact(facts, {
+          type: "warning",
+          vendor: "Fortinet",
+          label: "Fortinet broad allow policy",
+          value: `policy ${policyId} allows all sources to all destinations with ALL service`,
+          device: hostname,
+          confidence: "high",
+          sourceFile,
+          sanitizedEvidence: evidence
+        });
+      }
+    }
+  }
+}
+
+function pushFortinetRouteFacts({ rawText, sourceFile, hostname, facts }: FortinetParserContext) {
+  for (const section of getFortinetConfigSections(rawText, "config router static")) {
+    for (const { name: routeId, body } of parseFortinetEditBlocks(section)) {
+      const dst = body.match(/^\s*set\s+dst\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)/im);
+      const gateway = getFortinetSetValue(body, "gateway");
+      const device = getFortinetSetValue(body, "device");
+      const distance = getFortinetSetValue(body, "distance");
+      const priority = getFortinetSetValue(body, "priority");
+      const cidr = dst ? derivePrefixFromIp(dst[1], dst[2]) : "0.0.0.0/0";
+      if (!cidr && !gateway && !device) continue;
+
+      pushFact(facts, {
+        type: "route",
+        vendor: "Fortinet",
+        label: cidr === "0.0.0.0/0" ? "Fortinet default route" : "Fortinet static route",
+        value: [cidr, gateway ? `via ${gateway}` : undefined, device ? `dev ${device}` : undefined, distance ? `distance ${distance}` : undefined, priority ? `priority ${priority}` : undefined].filter(Boolean).join(" "),
+        device: hostname,
+        interfaceName: device,
+        ip: gateway,
+        cidr: cidr || undefined,
+        prefix: cidr || undefined,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: sanitizeConfigText([`edit ${routeId}`, ...body.split("\n").slice(0, 10)].join("\n"))
+      });
+    }
+  }
+
+  for (const section of getFortinetConfigSections(rawText, "config router ospf")) {
+    const routerId = getFortinetSetValue(section, "router-id");
+    if (routerId) {
+      pushFact(facts, {
+        type: "neighbor",
+        vendor: "Fortinet",
+        label: "Fortinet OSPF router ID",
+        value: routerId,
+        device: hostname,
+        ip: routerId,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: `config router ospf\n set router-id ${routerId}`
+      });
+    }
+
+    for (const prefixLine of section.matchAll(/^\s*set\s+prefix\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)/gim)) {
+      const cidr = derivePrefixFromIp(prefixLine[1], prefixLine[2]);
+      if (!cidr) continue;
+      pushFact(facts, {
+        type: "prefix",
+        vendor: "Fortinet",
+        label: "Fortinet OSPF advertised network",
+        value: cidr,
+        device: hostname,
+        cidr,
+        prefix: cidr,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: `set prefix ${prefixLine[1]} ${prefixLine[2]}`
+      });
+    }
+  }
+
+  for (const section of getFortinetConfigSections(rawText, "config router bgp")) {
+    const localAs = getFortinetSetValue(section, "as");
+    if (localAs) {
+      pushFact(facts, {
+        type: "neighbor",
+        vendor: "Fortinet",
+        label: "Fortinet BGP local AS",
+        value: `local-as ${localAs}`,
+        device: hostname,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: `config router bgp\n set as ${localAs}`
+      });
+    }
+
+    const neighborSections = getFortinetConfigSections(section, "config neighbor");
+    for (const neighborSection of neighborSections) {
+      for (const { name: neighborIp, body } of parseFortinetEditBlocks(neighborSection)) {
+        const remoteAs = getFortinetSetValue(body, "remote-as");
+        pushFact(facts, {
+          type: "neighbor",
+          vendor: "Fortinet",
+          label: "Fortinet BGP neighbor",
+          value: `${neighborIp}${remoteAs ? ` remote-as ${remoteAs}` : ""}`,
+          device: hostname,
+          ip: neighborIp,
+          confidence: remoteAs ? "high" : "medium",
+          sourceFile,
+          sanitizedEvidence: sanitizeConfigText([`edit "${neighborIp}"`, ...body.split("\n").slice(0, 8)].join("\n"))
+        });
+      }
+    }
+  }
+}
+
+function pushFortinetDhcpFacts({ rawText, sourceFile, hostname, facts }: FortinetParserContext) {
+  for (const section of getFortinetConfigSections(rawText, "config system dhcp server")) {
+    for (const { name: serverId, body } of parseFortinetEditBlocks(section)) {
+      const interfaceName = getFortinetSetValue(body, "interface");
+      const gateway = getFortinetSetValue(body, "default-gateway");
+      const netmask = getFortinetSetValue(body, "netmask");
+      const startIp = getFortinetSetValue(body, "start-ip");
+      const endIp = getFortinetSetValue(body, "end-ip");
+      const dnsService = getFortinetSetValue(body, "dns-service");
+      const cidr = gateway && netmask ? derivePrefixFromIp(gateway, netmask) : undefined;
+
+      pushFact(facts, {
+        type: "firewall-policy",
+        vendor: "Fortinet",
+        label: "Fortinet DHCP server",
+        value: [
+          `dhcp ${serverId}`,
+          interfaceName ? `interface ${interfaceName}` : undefined,
+          cidr ? `scope ${cidr}` : undefined,
+          gateway ? `gateway ${gateway}` : undefined,
+          startIp && endIp ? `range ${startIp}-${endIp}` : undefined,
+          dnsService ? `dns ${dnsService}` : undefined
+        ].filter(Boolean).join("; "),
+        device: hostname,
+        interfaceName,
+        ip: gateway,
+        cidr,
+        prefix: cidr,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: sanitizeConfigText([`edit ${serverId}`, ...body.split("\n").slice(0, 14)].join("\n"))
+      });
+
+      if (cidr) {
+        pushFact(facts, {
+          type: "prefix",
+          vendor: "Fortinet",
+          label: "Fortinet DHCP scope prefix",
+          value: cidr,
+          device: hostname,
+          interfaceName,
+          cidr,
+          prefix: cidr,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: `edit ${serverId}\n set default-gateway ${gateway}\n set netmask ${netmask}`
+        });
+      }
+    }
+  }
+}
+
+function pushFortinetVpnFacts({ rawText, sourceFile, hostname, facts }: FortinetParserContext) {
+  for (const section of getFortinetConfigSections(rawText, "config vpn ipsec phase1-interface")) {
+    for (const { name: vpnName, body } of parseFortinetEditBlocks(section)) {
+      const interfaceName = getFortinetSetValue(body, "interface");
+      const remoteGateway = getFortinetSetValue(body, "remote-gw");
+      const peerId = getFortinetSetValue(body, "peerid");
+      pushFact(facts, {
+        type: "neighbor",
+        vendor: "Fortinet",
+        label: "Fortinet IPsec VPN peer",
+        value: [vpnName, interfaceName ? `underlay ${interfaceName}` : undefined, remoteGateway ? `remote-gw ${remoteGateway}` : undefined, peerId ? `peerid ${peerId}` : undefined].filter(Boolean).join("; "),
+        device: hostname,
+        interfaceName,
+        ip: remoteGateway,
+        confidence: remoteGateway ? "high" : "medium",
+        sourceFile,
+        sanitizedEvidence: sanitizeConfigText([`edit "${vpnName}"`, ...body.split("\n").slice(0, 12)].join("\n"))
+      });
+    }
+  }
+}
+
+function parseFortinetFacts(rawText: string, sourceFile: string, hostname: string | undefined, facts: ImportFact[]) {
+  const context = { rawText, sourceFile, hostname, facts };
+  pushFortinetInterfaceFacts(context);
+  pushFortinetZoneFacts(context);
+  pushFortinetAddressFacts(context);
+  pushFortinetPolicyFacts(context);
+  pushFortinetRouteFacts(context);
+  pushFortinetDhcpFacts(context);
+  pushFortinetVpnFacts(context);
+}
+
+
+export function parseImportedConfig(rawText: string, sourceFile = "pasted-config", forcedVendor?: VendorKind): ImportJob {
+  const sanitized = sanitizeConfigText(rawText);
+  const vendor = forcedVendor && forcedVendor !== "Unknown" ? forcedVendor : detectVendor(rawText, sourceFile);
+  const facts: ImportFact[] = [];
+  const hostname = extractHostname(rawText, vendor);
+
+  if (hostname) {
+    pushFact(facts, {
+      type: "device",
+      vendor,
+      label: "Device hostname",
+      value: hostname,
+      device: hostname,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: `hostname ${hostname}`
+    });
+  }
+
+  if (vendor === "Cisco" || vendor === "Unknown") {
+    parseCiscoFacts(rawText, sourceFile, hostname, facts);
+  }
+
+  if (vendor === "Fortinet" || vendor === "Unknown") {
+    parseFortinetFacts(rawText, sourceFile, hostname, facts);
   }
 
   if (vendor === "Windows" || vendor === "Unknown") {
