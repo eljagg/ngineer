@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "node",
+  "packages": {
+    "node": "20"
+  },
+  "steps": {
+    "install": {
+      "commands": [
+        {
+          "cmd": "npm install --include=dev --no-audit --no-fund --no-progress",
+          "customName": "Install npm dependencies"
+        }
+      ]
+    }
+  }
+}
