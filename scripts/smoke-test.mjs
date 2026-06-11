@@ -13,6 +13,10 @@ const requiredFiles = [
   "src/lib/network-seed.ts",
   "src/lib/neo4j.ts",
   "src/types/elkjs.d.ts",
+  "src/components/IpamWorkspace.tsx",
+  "src/lib/ipam-model.ts",
+  "src/app/api/ipam/commit/route.ts",
+  "src/app/api/ipam/snapshot/route.ts",
   ".github/workflows/neo4j-keepalive.yml"
 ];
 
@@ -31,7 +35,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.6") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.7") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -63,4 +67,20 @@ if (!networkPage.includes("NetworkFlowCanvas")) {
   process.exit(1);
 }
 
-console.log("Smoke test passed: NGINEER v0.1.6 React Flow + ELK topology engine files are present.");
+const ipamWorkspace = readFileSync("src/components/IpamWorkspace.tsx", "utf8");
+for (const marker of ["Upload files", "Commit to Neo4j", "Apply approved locally", "Export IP CSV", "Review discovered facts"]) {
+  if (!ipamWorkspace.includes(marker)) {
+    console.error(`IpamWorkspace is missing expected IPAM marker: ${marker}`);
+    process.exit(1);
+  }
+}
+
+const ipamModel = readFileSync("src/lib/ipam-model.ts", "utf8");
+for (const marker of ["parseImportedConfig", "sanitizeConfigText", "findIpamConflicts", "applyApprovedImportFacts", "detectVendor"]) {
+  if (!ipamModel.includes(marker)) {
+    console.error(`IPAM model is missing expected parser marker: ${marker}`);
+    process.exit(1);
+  }
+}
+
+console.log("Smoke test passed: NGINEER v0.1.7 full IPAM foundation and import staging files are present.");
