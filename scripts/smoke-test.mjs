@@ -5,6 +5,7 @@ const requiredFiles = [
   ".env.example",
   "src/app/page.tsx",
   "src/app/network/page.tsx",
+  "src/app/health/page.tsx",
   "src/app/api/health/route.ts",
   "src/app/api/neo4j/health/route.ts",
   "src/app/api/neo4j/keepalive/route.ts",
@@ -35,7 +36,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.9") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.9.3") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -61,8 +62,9 @@ if (!layout.includes("@xyflow/react/dist/style.css")) {
   process.exit(1);
 }
 
-const networkPage = readFileSync("src/app/network/page.tsx", "utf8");
-if (!networkPage.includes("NetworkFlowCanvas")) {
+const networkPage = readFileSync("src/app/network/page.tsx",
+  "src/app/health/page.tsx", "utf8");
+if (!networkPage.includes("NetworkFlowCanvas") || !networkPage.includes("network-max-canvas")) {
   console.error("Network page is not using the React Flow topology canvas");
   process.exit(1);
 }
@@ -99,4 +101,4 @@ for (const marker of [
   }
 }
 
-console.log("Smoke test passed: NGINEER v0.1.9.2 Fortinet parser DHCP type-safety hotfix files are present.");
+console.log("Smoke test passed: NGINEER v0.1.9.3 full-canvas topology and health alias files are present.");

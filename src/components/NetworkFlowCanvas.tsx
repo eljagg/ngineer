@@ -380,13 +380,7 @@ function SelectionInspector({ selection }: { selection: Selection }) {
     );
   }
 
-  return (
-    <aside className="rf-inspector" aria-label="Topology interaction hints">
-      <span className="badge good">Port-aware topology engine</span>
-      <strong>React Flow handles + ELK routing</strong>
-      <p>Connections now dock to mapped port anchors instead of floating around device icons. Drag, inspect, auto-layout, and prepare for Neo4j-driven topology reconstruction.</p>
-    </aside>
-  );
+  return null;
 }
 
 async function getLayoutedNodes(nodes: NetworkFlowNode[], edges: NetworkFlowEdge[], direction: LayoutDirection): Promise<NetworkFlowNode[]> {
@@ -534,13 +528,13 @@ function NetworkFlowCanvasInner() {
     setNodes(nextNodes);
     setEdges(nextEdges);
     setSelection(null);
-    window.requestAnimationFrame(() => fitView({ padding: 0.13, duration: 350 }));
+    window.requestAnimationFrame(() => fitView({ padding: 0.06, duration: 350 }));
   }, [activePath, fitView, setEdges, setNodes, showPorts]);
 
   const runAutoLayout = useCallback(async (direction: LayoutDirection = layoutDirection) => {
     const nextNodes = await getLayoutedNodes(nodes, edges, direction);
     setNodes(nextNodes);
-    window.requestAnimationFrame(() => fitView({ padding: 0.13, duration: 450 }));
+    window.requestAnimationFrame(() => fitView({ padding: 0.06, duration: 450 }));
   }, [edges, fitView, layoutDirection, nodes, setNodes]);
 
   const switchDirection = useCallback(async () => {
@@ -574,7 +568,7 @@ function NetworkFlowCanvasInner() {
         connectionLineType={ConnectionLineType.SmoothStep}
         defaultEdgeOptions={{ type: "networkLink", markerEnd: { type: MarkerType.ArrowClosed } }}
         fitView
-        fitViewOptions={{ padding: 0.16 }}
+        fitViewOptions={{ padding: 0.06 }}
         minZoom={0.2}
         maxZoom={2.2}
         panOnScroll

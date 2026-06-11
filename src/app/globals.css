@@ -1690,3 +1690,162 @@ p { color: var(--muted); line-height: 1.6; }
 .rf-edge-label-spline {
   border-color: rgba(167, 139, 250, 0.36);
 }
+
+/* v0.1.9.3: full-canvas topology workspace and compact health alias */
+body:has(.network-max-canvas) .main {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  margin: 0;
+}
+
+body:has(.network-max-canvas) .footer {
+  display: none;
+}
+
+.network-max-canvas {
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 4.35rem);
+  min-height: 680px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 15% 18%, rgba(56,189,248,0.10), transparent 30rem),
+    radial-gradient(circle at 75% 10%, rgba(167,139,250,0.12), transparent 34rem),
+    #030712;
+}
+
+.network-max-canvas .rf-topology-shell,
+.network-max-canvas .rf-canvas-workspace {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.network-max-canvas .rf-topology-shell .react-flow {
+  width: 100%;
+  height: 100%;
+}
+
+.network-max-canvas .rf-control-panel {
+  margin: 0.55rem;
+  padding: 0.42rem;
+  border-radius: 0.85rem;
+  background: rgba(2, 6, 23, 0.52);
+  box-shadow: 0 12px 34px rgba(0,0,0,0.22);
+}
+
+.network-max-canvas .rf-control-panel button {
+  min-height: 2.05rem;
+  padding: 0.36rem 0.58rem;
+  font-size: 0.74rem;
+}
+
+.network-max-canvas .rf-mode-panel {
+  margin: 0.55rem;
+  padding: 0.42rem 0.58rem;
+  border-radius: 0.85rem;
+  background: rgba(2, 6, 23, 0.48);
+  font-size: 0.76rem;
+}
+
+.network-max-canvas .rf-device-node {
+  width: 196px;
+  min-height: 118px;
+}
+
+.network-max-canvas .rf-device-icon-wrap {
+  width: 178px;
+  height: 96px;
+}
+
+.network-max-canvas .rf-device-caption {
+  max-width: 176px;
+  padding: 0.34rem 0.46rem;
+  gap: 0.02rem 0.35rem;
+  background: rgba(2, 6, 23, 0.62);
+  box-shadow: 0 10px 28px rgba(0,0,0,0.22);
+}
+
+.network-max-canvas .rf-device-caption small {
+  display: none;
+}
+
+.network-max-canvas .rf-port-east { right: -1px; }
+.network-max-canvas .rf-port-west { left: -1px; }
+.network-max-canvas .rf-port-north { top: 6px; }
+.network-max-canvas .rf-port-south { bottom: 32px; }
+
+.network-max-canvas .rf-network-edge {
+  stroke-width: 2.6;
+  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.22));
+}
+
+.network-max-canvas .rf-edge-label {
+  padding: 0.26rem 0.42rem;
+  font-size: 0.62rem;
+  background: rgba(2, 6, 23, 0.72);
+}
+
+.network-max-canvas .rf-inspector {
+  right: 0.8rem;
+  bottom: 0.8rem;
+  width: min(23rem, calc(100% - 1.6rem));
+  padding: 0.8rem;
+  background: rgba(2, 6, 23, 0.72);
+}
+
+.network-max-canvas .react-flow__controls,
+.network-max-canvas .react-flow__minimap {
+  margin: 0.7rem;
+}
+
+.health-alias-page {
+  min-height: calc(100vh - 11rem);
+  display: grid;
+  place-items: center;
+  padding: clamp(1rem, 4vw, 3rem);
+}
+
+.health-alias-card {
+  width: min(680px, 100%);
+  padding: clamp(1.2rem, 3vw, 2rem);
+  border-radius: 1.2rem;
+  background: rgba(13, 27, 47, 0.72);
+  box-shadow: var(--shadow);
+}
+
+.health-alias-card h1 {
+  margin-top: 0.7rem;
+}
+
+.health-alias-card code {
+  color: #bae6fd;
+  background: rgba(56, 189, 248, 0.1);
+  border-radius: 0.4rem;
+  padding: 0.12rem 0.32rem;
+}
+
+.health-link-grid {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 1.3rem;
+}
+
+.health-link-grid a {
+  display: flex;
+  align-items: center;
+  min-height: 2.8rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.85rem;
+  background: rgba(255,255,255,0.07);
+  color: var(--text);
+  font-weight: 800;
+}
+
+.health-link-grid a:hover {
+  background: rgba(56, 189, 248, 0.16);
+}
