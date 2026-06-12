@@ -1409,6 +1409,431 @@ function parseFortinetFacts(rawText: string, sourceFile: string, hostname: strin
 }
 
 
+type ServerParserContext = {
+  rawText: string;
+  sourceFile: string;
+  hostname?: string;
+  facts: ImportFact[];
+};
+
+function normalizeParsedValue(value: string | null | undefined): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  const cleaned = value.trim().replace(/^"|"$/g, "");
+  if (!cleaned || cleaned.toLowerCase() === "none" || cleaned.toLowerCase() === "null" || cleaned.toLowerCase() === "n/a") return undefined;
+  return cleaned;
+}
+
+function normalizeWindowsAdapterName(name: string | undefined): string | undefined {
+  const cleaned = normalizeParsedValue(name);
+  if (!cleaned) return undefined;
+  return cleaned
+    .replace(/^Ethernet adapter\s+/i, "")
+    .replace(/^Wireless LAN adapter\s+/i, "")
+    .replace(/^Unknown adapter\s+/i, "")
+    .replace(/:$/, "")
+    .trim();
+}
+
+function normalizeLinuxInterfaceName(name: string | undefined): string | undefined {
+  const cleaned = normalizeParsedValue(name);
+  if (!cleaned) return undefined;
+  return cleaned.replace(/@.*$/, "").replace(/:$/, "");
+}
+
+function prefixLengthToNetmask(prefixLength: string | number): string | undefined {
+  const length = typeof prefixLength === "number" ? prefixLength : Number(prefixLength);
+  if (!Number.isInteger(length) || length < 0 || length > 32) return undefined;
+  const mask = length === 0 ? 0 : (0xffffffff << (32 - length)) >>> 0;
+  return intToIpv4(mask);
+}
+
+function derivePrefixFromIpSafe(ip: string | undefined, maskOrCidr: string | undefined): string | undefined {
+  if (!ip || !maskOrCidr) return undefined;
+  return normalizeParsedValue(derivePrefixFromIp(ip, maskOrCidr));
+}
+
+function pushServerIpFacts(
+  facts: ImportFact[],
+  vendor: "Windows" | "Linux",
+  sourceFile: string,
+  hostname: string | undefined,
+  interfaceName: string | undefined,
+  ip: string | undefined,
+  cidr: string | undefined,
+  evidence: string,
+  labelPrefix: string
+) {
+  if (!ip) return;
+
+  pushFact(facts, {
+    type: "ip-address",
+    vendor,
+    label: `${labelPrefix} interface IP`,
+    value: ip,
+    device: hostname,
+    interfaceName,
+    ip,
+    cidr,
+    prefix: cidr,
+    confidence: "high",
+    sourceFile,
+    sanitizedEvidence: evidence
+  });
+
+  if (cidr) {
+    pushFact(facts, {
+      type: "prefix",
+      vendor,
+      label: `${labelPrefix} connected prefix`,
+      value: cidr,
+      device: hostname,
+      interfaceName,
+      cidr,
+      prefix: cidr,
+      confidence: "medium",
+      sourceFile,
+      sanitizedEvidence: evidence
+    });
+  }
+}
+
+function pushServerRouteFact(
+  facts: ImportFact[],
+  vendor: "Windows" | "Linux",
+  sourceFile: string,
+  hostname: string | undefined,
+  interfaceName: string | undefined,
+  gateway: string | undefined,
+  destination: string | undefined,
+  evidence: string,
+  label: string
+) {
+  if (!gateway && !destination) return;
+  pushFact(facts, {
+    type: "route",
+    vendor,
+    label,
+    value: [destination || "0.0.0.0/0", gateway ? `via ${gateway}` : undefined, interfaceName ? `dev ${interfaceName}` : undefined].filter(Boolean).join(" "),
+    device: hostname,
+    interfaceName,
+    ip: gateway,
+    cidr: destination,
+    prefix: destination,
+    confidence: gateway ? "medium" : "low",
+    sourceFile,
+    sanitizedEvidence: evidence
+  });
+}
+
+function parseWindowsFacts({ rawText, sourceFile, hostname, facts }: ServerParserContext) {
+  const lines = rawText.split(/\r?\n/);
+  let currentAdapter = "Windows NIC";
+  let pendingIp: string | undefined;
+  let pendingMask: string | undefined;
+
+  const osName = rawText.match(/^\s*OS Name\s*:\s*(.+)$/im)?.[1] || rawText.match(/^\s*OS Version\s*:\s*(.+)$/im)?.[1];
+  if (osName) {
+    pushFact(facts, {
+      type: "device",
+      vendor: "Windows",
+      label: "Windows server OS evidence",
+      value: normalizeParsedValue(osName) || osName,
+      device: hostname,
+      confidence: "medium",
+      sourceFile,
+      sanitizedEvidence: osName.trim()
+    });
+  }
+
+  for (const line of lines) {
+    const adapterMatch = line.match(/^\s*([^:\n]+adapter[^:\n]*):\s*$/i);
+    if (adapterMatch) {
+      currentAdapter = normalizeWindowsAdapterName(adapterMatch[1]) || currentAdapter;
+      pendingIp = undefined;
+      pendingMask = undefined;
+      pushFact(facts, {
+        type: "interface",
+        vendor: "Windows",
+        label: "Windows network adapter",
+        value: currentAdapter,
+        device: hostname,
+        interfaceName: currentAdapter,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      continue;
+    }
+
+    const interfaceAlias = line.match(/^\s*InterfaceAlias\s*[:=]\s*(.+)$/i)?.[1];
+    if (interfaceAlias) {
+      currentAdapter = normalizeWindowsAdapterName(interfaceAlias) || currentAdapter;
+      pushFact(facts, {
+        type: "interface",
+        vendor: "Windows",
+        label: "Windows PowerShell interface alias",
+        value: currentAdapter,
+        device: hostname,
+        interfaceName: currentAdapter,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      continue;
+    }
+
+    const ipconfigIp = line.match(/IPv4 Address[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (ipconfigIp) {
+      pendingIp = ipconfigIp;
+      const cidr = derivePrefixFromIpSafe(pendingIp, pendingMask);
+      pushServerIpFacts(facts, "Windows", sourceFile, hostname, currentAdapter, pendingIp, cidr, line.trim(), "Windows NIC");
+      continue;
+    }
+
+    const mask = line.match(/Subnet Mask[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (mask) {
+      pendingMask = mask;
+      const cidr = derivePrefixFromIpSafe(pendingIp, pendingMask);
+      if (pendingIp && cidr) pushServerIpFacts(facts, "Windows", sourceFile, hostname, currentAdapter, pendingIp, cidr, `adapter ${currentAdapter} ${pendingIp} ${mask}`, "Windows NIC");
+      continue;
+    }
+
+    const psIp = line.match(/^\s*IPv4Address\s*[:=]\s*(\d+\.\d+\.\d+\.\d+)(?:\/(\d+))?/i);
+    if (psIp) {
+      const prefixLength = psIp[2] || rawText.match(/^\s*PrefixLength\s*[:=]\s*(\d+)/im)?.[1];
+      const cidr = prefixLength ? derivePrefixFromIpSafe(psIp[1], prefixLength) : undefined;
+      pushServerIpFacts(facts, "Windows", sourceFile, hostname, currentAdapter, psIp[1], cidr, line.trim(), "Windows PowerShell");
+      continue;
+    }
+
+    const gateway = line.match(/Default Gateway[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1] || line.match(/^\s*IPv4DefaultGateway\s*[:=]\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (gateway) {
+      pushServerRouteFact(facts, "Windows", sourceFile, hostname, currentAdapter, gateway, "0.0.0.0/0", line.trim(), "Windows default gateway");
+      continue;
+    }
+
+    const dhcp = line.match(/DHCP Server[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (dhcp) {
+      pushFact(facts, {
+        type: "ip-address",
+        vendor: "Windows",
+        label: "Windows DHCP server",
+        value: dhcp,
+        device: hostname,
+        interfaceName: currentAdapter,
+        ip: dhcp,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      continue;
+    }
+
+    const dns = line.match(/(?:DNS Servers|DNSServer|ServerAddresses)[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (dns) {
+      pushFact(facts, {
+        type: "ip-address",
+        vendor: "Windows",
+        label: "Windows DNS server",
+        value: dns,
+        device: hostname,
+        interfaceName: currentAdapter,
+        ip: dns,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      continue;
+    }
+
+    const routePrint = line.match(/^\s*(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+\d+/);
+    if (routePrint) {
+      const destination = derivePrefixFromIpSafe(routePrint[1], routePrint[2]);
+      pushServerRouteFact(facts, "Windows", sourceFile, hostname, currentAdapter, routePrint[3], destination, line.trim(), "Windows route print entry");
+      continue;
+    }
+
+    const dhcpScope = line.match(/ScopeId\s*[:=]\s*(\d+\.\d+\.\d+\.\d+).*?SubnetMask\s*[:=]\s*(\d+\.\d+\.\d+\.\d+)/i);
+    if (dhcpScope) {
+      const cidr = derivePrefixFromIpSafe(dhcpScope[1], dhcpScope[2]);
+      if (cidr) {
+        pushFact(facts, {
+          type: "prefix",
+          vendor: "Windows",
+          label: "Windows DHCP scope prefix",
+          value: cidr,
+          device: hostname,
+          cidr,
+          prefix: cidr,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: line.trim()
+        });
+      }
+    }
+  }
+}
+
+function parseLinuxFacts({ rawText, sourceFile, hostname, facts }: ServerParserContext) {
+  const lines = rawText.split(/\r?\n/);
+  let currentInterface: string | undefined;
+  let ifcfgDevice: string | undefined;
+  let ifcfgIp: string | undefined;
+  let ifcfgMaskOrPrefix: string | undefined;
+
+  const osPrettyName = rawText.match(/^PRETTY_NAME="?([^"\n]+)"?/im)?.[1] || rawText.match(/^\s*Operating System:\s*(.+)$/im)?.[1];
+  if (osPrettyName) {
+    pushFact(facts, {
+      type: "device",
+      vendor: "Linux",
+      label: "Linux OS evidence",
+      value: normalizeParsedValue(osPrettyName) || osPrettyName,
+      device: hostname,
+      confidence: "medium",
+      sourceFile,
+      sanitizedEvidence: osPrettyName.trim()
+    });
+  }
+
+  for (const line of lines) {
+    const interfaceHeader = line.match(/^\s*\d+:\s*([^:@]+)(?:@[^:]+)?:\s*<([^>]*)>/);
+    if (interfaceHeader) {
+      currentInterface = normalizeLinuxInterfaceName(interfaceHeader[1]);
+      pushFact(facts, {
+        type: "interface",
+        vendor: "Linux",
+        label: "Linux ip addr interface",
+        value: `${currentInterface || interfaceHeader[1]} ${interfaceHeader[2]}`,
+        device: hostname,
+        interfaceName: currentInterface,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      continue;
+    }
+
+    const ipAddr = line.match(/\binet\s+(\d+\.\d+\.\d+\.\d+)\/(\d+)\b(?:[^\n]*\sdev\s+(\S+))?/i);
+    if (ipAddr) {
+      const interfaceName = normalizeLinuxInterfaceName(ipAddr[3]) || currentInterface;
+      const cidr = derivePrefixFromIpSafe(ipAddr[1], ipAddr[2]);
+      pushServerIpFacts(facts, "Linux", sourceFile, hostname, interfaceName, ipAddr[1], cidr, line.trim(), "Linux");
+      continue;
+    }
+
+    const defaultRoute = line.match(/^default\s+via\s+(\d+\.\d+\.\d+\.\d+)(?:\s+dev\s+(\S+))?/i);
+    if (defaultRoute) {
+      pushServerRouteFact(facts, "Linux", sourceFile, hostname, normalizeLinuxInterfaceName(defaultRoute[2]) || currentInterface, defaultRoute[1], "0.0.0.0/0", line.trim(), "Linux default route");
+      continue;
+    }
+
+    const connectedRoute = line.match(/^(\d+\.\d+\.\d+\.\d+\/\d+)\s+dev\s+(\S+)(?:.*?\ssrc\s+(\d+\.\d+\.\d+\.\d+))?/i);
+    if (connectedRoute) {
+      const interfaceName = normalizeLinuxInterfaceName(connectedRoute[2]);
+      pushFact(facts, {
+        type: "prefix",
+        vendor: "Linux",
+        label: "Linux connected route prefix",
+        value: connectedRoute[1],
+        device: hostname,
+        interfaceName,
+        cidr: connectedRoute[1],
+        prefix: connectedRoute[1],
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      if (connectedRoute[3]) pushServerIpFacts(facts, "Linux", sourceFile, hostname, interfaceName, connectedRoute[3], connectedRoute[1], line.trim(), "Linux route src");
+      continue;
+    }
+
+    const nmcliAddress = line.match(/^\s*IP4\.ADDRESS\[\d+\]:\s*(\d+\.\d+\.\d+\.\d+)\/(\d+)/i);
+    if (nmcliAddress) {
+      const cidr = derivePrefixFromIpSafe(nmcliAddress[1], nmcliAddress[2]);
+      pushServerIpFacts(facts, "Linux", sourceFile, hostname, currentInterface, nmcliAddress[1], cidr, line.trim(), "Linux NetworkManager");
+      continue;
+    }
+
+    const nmcliGateway = line.match(/^\s*IP4\.GATEWAY:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (nmcliGateway) {
+      pushServerRouteFact(facts, "Linux", sourceFile, hostname, currentInterface, nmcliGateway, "0.0.0.0/0", line.trim(), "Linux NetworkManager gateway");
+      continue;
+    }
+
+    const nmcliDns = line.match(/^\s*IP4\.DNS\[\d+\]:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (nmcliDns) {
+      pushFact(facts, {
+        type: "ip-address",
+        vendor: "Linux",
+        label: "Linux DNS server",
+        value: nmcliDns,
+        device: hostname,
+        interfaceName: currentInterface,
+        ip: nmcliDns,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      continue;
+    }
+
+    const ifcfgDeviceLine = line.match(/^DEVICE=(.+)$/i)?.[1] || line.match(/^NAME=(.+)$/i)?.[1];
+    if (ifcfgDeviceLine) {
+      ifcfgDevice = normalizeLinuxInterfaceName(ifcfgDeviceLine);
+      currentInterface = ifcfgDevice || currentInterface;
+      pushFact(facts, {
+        type: "interface",
+        vendor: "Linux",
+        label: "Linux ifcfg interface",
+        value: ifcfgDevice || ifcfgDeviceLine,
+        device: hostname,
+        interfaceName: ifcfgDevice,
+        confidence: "medium",
+        sourceFile,
+        sanitizedEvidence: line.trim()
+      });
+      continue;
+    }
+
+    const ifcfgIpLine = line.match(/^IPADDR=(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (ifcfgIpLine) {
+      ifcfgIp = ifcfgIpLine;
+      const cidr = derivePrefixFromIpSafe(ifcfgIp, ifcfgMaskOrPrefix);
+      pushServerIpFacts(facts, "Linux", sourceFile, hostname, ifcfgDevice || currentInterface, ifcfgIp, cidr, line.trim(), "Linux ifcfg");
+      continue;
+    }
+
+    const ifcfgPrefix = line.match(/^PREFIX=(\d+)/i)?.[1] || line.match(/^NETMASK=(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (ifcfgPrefix) {
+      ifcfgMaskOrPrefix = ifcfgPrefix;
+      const cidr = derivePrefixFromIpSafe(ifcfgIp, ifcfgMaskOrPrefix);
+      if (ifcfgIp && cidr) pushServerIpFacts(facts, "Linux", sourceFile, hostname, ifcfgDevice || currentInterface, ifcfgIp, cidr, `ifcfg ${ifcfgIp}/${ifcfgPrefix}`, "Linux ifcfg");
+      continue;
+    }
+
+    const ifcfgGateway = line.match(/^GATEWAY=(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (ifcfgGateway) {
+      pushServerRouteFact(facts, "Linux", sourceFile, hostname, ifcfgDevice || currentInterface, ifcfgGateway, "0.0.0.0/0", line.trim(), "Linux ifcfg gateway");
+      continue;
+    }
+
+    const netplanAddress = line.match(/addresses:\s*\[?\s*["']?(\d+\.\d+\.\d+\.\d+\/\d+)/i)?.[1];
+    if (netplanAddress) {
+      const [ip, prefixLength] = netplanAddress.split("/");
+      const cidr = derivePrefixFromIpSafe(ip, prefixLength);
+      pushServerIpFacts(facts, "Linux", sourceFile, hostname, currentInterface, ip, cidr, line.trim(), "Linux netplan");
+      continue;
+    }
+
+    const netplanGateway = line.match(/gateway4:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
+    if (netplanGateway) {
+      pushServerRouteFact(facts, "Linux", sourceFile, hostname, currentInterface, netplanGateway, "0.0.0.0/0", line.trim(), "Linux netplan gateway");
+      continue;
+    }
+  }
+}
+
+
 export function parseImportedConfig(rawText: string, sourceFile = "pasted-config", forcedVendor?: VendorKind): ImportJob {
   const sanitized = sanitizeConfigText(rawText);
   const vendor = forcedVendor && forcedVendor !== "Unknown" ? forcedVendor : detectVendor(rawText, sourceFile);
@@ -1437,102 +1862,11 @@ export function parseImportedConfig(rawText: string, sourceFile = "pasted-config
   }
 
   if (vendor === "Windows" || vendor === "Unknown") {
-    let currentAdapter = "Windows NIC";
-    for (const line of rawText.split("\n")) {
-      const adapter = line.match(/^([^:\n]+adapter[^:\n]*):/i);
-      if (adapter) currentAdapter = adapter[1].trim();
-      const ip = line.match(/IPv4 Address[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
-      const gateway = line.match(/Default Gateway[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
-      const dhcp = line.match(/DHCP Server[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
-      const mask = line.match(/Subnet Mask[^:]*:\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1];
-      const foundIp = ip || gateway || dhcp;
-      if (foundIp) {
-        const cidr = mask ? derivePrefixFromIp(foundIp, mask) : undefined;
-        pushFact(facts, {
-          type: ip ? "ip-address" : "route",
-          vendor: "Windows",
-          label: ip ? "Windows NIC IPv4" : gateway ? "Windows default gateway" : "Windows DHCP server",
-          value: foundIp,
-          device: hostname,
-          interfaceName: currentAdapter,
-          ip: foundIp,
-          cidr: cidr || undefined,
-          prefix: cidr || undefined,
-          confidence: ip ? "high" : "medium",
-          sourceFile,
-          sanitizedEvidence: line.trim()
-        });
-        if (cidr) {
-          pushFact(facts, {
-            type: "prefix",
-            vendor: "Windows",
-            label: "Windows connected prefix",
-            value: cidr,
-            device: hostname,
-            interfaceName: currentAdapter,
-            cidr,
-            prefix: cidr,
-            confidence: "medium",
-            sourceFile,
-            sanitizedEvidence: `adapter ${currentAdapter} ${cidr}`
-          });
-        }
-      }
-    }
+    parseWindowsFacts({ rawText, sourceFile, hostname, facts });
   }
 
   if (vendor === "Linux" || vendor === "Unknown") {
-    for (const line of rawText.split("\n")) {
-      const ipAddr = line.match(/\binet\s+(\d+\.\d+\.\d+\.\d+)\/(\d+)\b(?:[^\n]*\sdev\s+(\S+))?/i);
-      if (ipAddr) {
-        const cidr = derivePrefixFromIp(ipAddr[1], ipAddr[2]);
-        const interfaceName = ipAddr[3]?.replace(/:$/, "") || line.match(/^\d+:\s*([^:]+):/)?.[1];
-        if (cidr) {
-          pushFact(facts, {
-            type: "prefix",
-            vendor: "Linux",
-            label: "Linux connected prefix",
-            value: cidr,
-            device: hostname,
-            interfaceName,
-            cidr,
-            prefix: cidr,
-            confidence: "medium",
-            sourceFile,
-            sanitizedEvidence: line.trim()
-          });
-          pushFact(facts, {
-            type: "ip-address",
-            vendor: "Linux",
-            label: "Linux interface IP",
-            value: ipAddr[1],
-            device: hostname,
-            interfaceName,
-            ip: ipAddr[1],
-            cidr,
-            prefix: cidr,
-            confidence: "high",
-            sourceFile,
-            sanitizedEvidence: line.trim()
-          });
-        }
-      }
-      const defaultRoute = line.match(/^default\s+via\s+(\d+\.\d+\.\d+\.\d+)(?:\s+dev\s+(\S+))?/i);
-      if (defaultRoute) {
-        pushFact(facts, {
-          type: "route",
-          vendor: "Linux",
-          label: "Linux default route",
-          value: defaultRoute[1],
-          device: hostname,
-          interfaceName: defaultRoute[2],
-          ip: defaultRoute[1],
-          confidence: "medium",
-          sourceFile,
-          sanitizedEvidence: line.trim()
-        });
-      }
-    }
+    parseLinuxFacts({ rawText, sourceFile, hostname, facts });
   }
 
   if (vendor === "Check Point" || vendor === "Ubiquiti") {

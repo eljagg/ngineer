@@ -36,7 +36,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.9.3") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.10") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -62,8 +62,13 @@ if (!layout.includes("@xyflow/react/dist/style.css")) {
   process.exit(1);
 }
 
-const networkPage = readFileSync("src/app/network/page.tsx",
-  "src/app/health/page.tsx", "utf8");
+const networkPage = readFileSync("src/app/network/page.tsx", "utf8");
+const healthPage = readFileSync("src/app/health/page.tsx", "utf8");
+if (!healthPage.includes("NGINEER health")) {
+  console.error("Health page is missing expected status text");
+  process.exit(1);
+}
+
 if (!networkPage.includes("NetworkFlowCanvas") || !networkPage.includes("network-max-canvas")) {
   console.error("Network page is not using the React Flow topology canvas");
   process.exit(1);
@@ -101,4 +106,22 @@ for (const marker of [
   }
 }
 
-console.log("Smoke test passed: NGINEER v0.1.9.3 full-canvas topology and health alias files are present.");
+for (const marker of [
+  "parseWindowsFacts",
+  "Windows network adapter",
+  "Windows default gateway",
+  "Windows DHCP scope prefix",
+  "Windows DNS server",
+  "parseLinuxFacts",
+  "Linux ip addr interface",
+  "Linux connected route prefix",
+  "Linux NetworkManager gateway",
+  "Linux netplan gateway"
+]) {
+  if (!ipamModel.includes(marker)) {
+    console.error(`IPAM model is missing expected Windows/Linux parser marker: ${marker}`);
+    process.exit(1);
+  }
+}
+
+console.log("Smoke test passed: NGINEER v0.1.10 Windows/Linux server parser files are present.");
