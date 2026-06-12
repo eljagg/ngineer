@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMissingNeo4jEnv, getServerEnv } from "@/lib/env";
 import { getNeo4jDriver } from "@/lib/neo4j";
+import { apiErrorResponse, requireIpamApiToken } from "@/lib/api-auth";
 import { sanitizeConfigText, type ImportFact, type IpamInventory } from "@/lib/ipam-model";
 
 type CommitRequestBody = {
@@ -10,19 +11,45 @@ type CommitRequestBody = {
 
 export const dynamic = "force-dynamic";
 
+const MAX_BODY_BYTES = 1_000_000;
+const MAX_IMPORT_JOBS = 50;
+const MAX_FACTS = 2000;
+
 function asArray<T>(value: T[] | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
+/** Demo seed records must never be persisted as source of truth. */
+function dropDemoRows<T extends { origin?: string }>(rows: T[]): T[] {
+  return rows.filter((row) => row.origin !== "demo");
+}
+
 export async function POST(request: NextRequest) {
+  const unauthorized = requireIpamApiToken(request);
+  if (unauthorized) return unauthorized;
+
   const missing = getMissingNeo4jEnv();
   if (missing.length > 0) {
     return NextResponse.json({ ok: false, error: "Missing Neo4j environment variables", missing }, { status: 400 });
   }
 
+  let rawBody: string;
+  try {
+    rawBody = await request.text();
+  } catch {
+    return NextResponse.json({ ok: false, error: "Unable to read request body" }, { status: 400 });
+  }
+
+  if (rawBody.length > MAX_BODY_BYTES) {
+    return NextResponse.json(
+      { ok: false, error: `Commit payload exceeds ${MAX_BODY_BYTES} bytes. Split the commit into smaller batches.` },
+      { status: 413 }
+    );
+  }
+
   let body: CommitRequestBody;
   try {
-    body = await request.json();
+    body = JSON.parse(rawBody);
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid JSON payload" }, { status: 400 });
   }
@@ -30,6 +57,20 @@ export async function POST(request: NextRequest) {
   const env = getServerEnv();
   const inventory = body.inventory;
   const approvedFacts = asArray(body.approvedFacts).filter((fact) => fact.approved);
+
+  if (asArray(inventory?.importJobs).length > MAX_IMPORT_JOBS) {
+    return NextResponse.json({ ok: false, error: `Too many import jobs in one commit (max ${MAX_IMPORT_JOBS}).` }, { status: 413 });
+  }
+
+  if (approvedFacts.length > MAX_FACTS) {
+    return NextResponse.json({ ok: false, error: `Too many approved facts in one commit (max ${MAX_FACTS}).` }, { status: 413 });
+  }
+
+  const sites = dropDemoRows(asArray(inventory?.sites));
+  const vrfs = dropDemoRows(asArray(inventory?.vrfs));
+  const vlans = dropDemoRows(asArray(inventory?.vlans));
+  const prefixes = dropDemoRows(asArray(inventory?.prefixes));
+  const addresses = asArray(inventory?.addresses).filter((row) => row.source !== "demo");
 
   if (!inventory && approvedFacts.length === 0) {
     return NextResponse.json({ ok: false, error: "No IPAM inventory or approved import facts supplied" }, { status: 400 });
@@ -86,7 +127,7 @@ export async function POST(request: NextRequest) {
             s.role = row.role,
             s.updatedAt = datetime()
         `,
-        { sites: asArray(inventory?.sites) }
+        { sites }
       );
 
       await tx.run(
@@ -98,7 +139,7 @@ export async function POST(request: NextRequest) {
             v.description = row.description,
             v.updatedAt = datetime()
         `,
-        { vrfs: asArray(inventory?.vrfs) }
+        { vrfs }
       );
 
       await tx.run(
@@ -114,7 +155,7 @@ export async function POST(request: NextRequest) {
         MERGE (s)-[:HAS_VLAN]->(vlan)
         MERGE (vlan)-[:IN_VRF]->(vrf)
         `,
-        { vlans: asArray(inventory?.vlans) }
+        { vlans }
       );
 
       await tx.run(
@@ -135,7 +176,7 @@ export async function POST(request: NextRequest) {
         OPTIONAL MATCH (vlan:VLAN {id: row.vlanId})
         FOREACH (_ IN CASE WHEN vlan IS NULL THEN [] ELSE [1] END | MERGE (vlan)-[:USES_PREFIX]->(p))
         `,
-        { prefixes: asArray(inventory?.prefixes) }
+        { prefixes }
       );
 
       await tx.run(
@@ -163,7 +204,7 @@ export async function POST(request: NextRequest) {
           MERGE (i)-[:HAS_IP]->(ip)
         )
         `,
-        { addresses: asArray(inventory?.addresses) }
+        { addresses }
       );
 
       await tx.run(
@@ -214,20 +255,23 @@ export async function POST(request: NextRequest) {
       return {
         importJobs: importJobRows.length,
         facts: factRows.length,
-        sites: asArray(inventory?.sites).length,
-        vrfs: asArray(inventory?.vrfs).length,
-        vlans: asArray(inventory?.vlans).length,
-        prefixes: asArray(inventory?.prefixes).length,
-        addresses: asArray(inventory?.addresses).length
+        sites: sites.length,
+        vrfs: vrfs.length,
+        vlans: vlans.length,
+        prefixes: prefixes.length,
+        addresses: addresses.length,
+        demoRowsExcluded:
+          asArray(inventory?.sites).length - sites.length +
+          asArray(inventory?.vrfs).length - vrfs.length +
+          asArray(inventory?.vlans).length - vlans.length +
+          asArray(inventory?.prefixes).length - prefixes.length +
+          (asArray(inventory?.addresses).length - addresses.length)
       };
     });
 
     return NextResponse.json({ ok: true, result });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "Unknown IPAM commit error" },
-      { status: 500 }
-    );
+    return apiErrorResponse("IPAM commit", error);
   } finally {
     await session.close();
   }

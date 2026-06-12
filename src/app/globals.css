@@ -2042,3 +2042,23 @@ body:has(.network-max-canvas) .footer {
     font-size: 1.45rem;
   }
 }
+
+/* v0.1.10.2 security/flow patch */
+.ipam-flow-strip article.ipam-flow-link {
+  cursor: pointer;
+}
+
+.ipam-flow-strip article.ipam-flow-link:hover {
+  border-color: var(--accent, #38bdf8);
+}
+
+.ipam-graph-snapshot {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 8px;
+}
+
+.ipam-graph-snapshot small {
+  opacity: 0.7;
+}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMissingNeo4jKeepAliveEnv, getServerEnv } from "@/lib/env";
 import { getNeo4jDriver } from "@/lib/neo4j";
+import { apiErrorResponse, getBearerToken, safeTokenEqual } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -12,15 +13,15 @@ type KeepAliveNodeShape = {
 };
 
 function getRequestToken(request: NextRequest): string | null {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader?.toLowerCase().startsWith("bearer ")) {
-    return authHeader.slice("bearer ".length).trim();
-  }
+  const bearer = getBearerToken(request);
+  if (bearer) return bearer;
 
   const headerToken = request.headers.get("x-keepalive-token");
   if (headerToken) return headerToken.trim();
 
-  return request.nextUrl.searchParams.get("token");
+  // Query-string tokens are intentionally no longer accepted: they leak into
+  // access logs, proxies, and browser history. Use the Authorization header.
+  return null;
 }
 
 export async function GET(request: NextRequest) {
@@ -36,7 +37,7 @@ export async function GET(request: NextRequest) {
   }
 
   const requestToken = getRequestToken(request);
-  if (!requestToken || requestToken !== env.neo4jKeepAliveToken) {
+  if (!requestToken || !env.neo4jKeepAliveToken || !safeTokenEqual(requestToken, env.neo4jKeepAliveToken)) {
     return NextResponse.json({ ok: false, error: "Unauthorized keep-alive request" }, { status: 401 });
   }
 
@@ -84,13 +85,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ ok: true, keepAlive: payload });
   } catch (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: error instanceof Error ? error.message : "Unknown Neo4j keep-alive error"
-      },
-      { status: 500 }
-    );
+    return apiErrorResponse("Neo4j keep-alive", error);
   } finally {
     await session.close();
   }

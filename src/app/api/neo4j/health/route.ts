@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getMissingNeo4jEnv, getServerEnv } from "@/lib/env";
 import { getNeo4jDriver } from "@/lib/neo4j";
+import { apiErrorResponse } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -24,10 +25,7 @@ export async function GET() {
       checkedAt: record.get("checkedAt").toString()
     });
   } catch (error) {
-    return NextResponse.json({
-      ok: false,
-      error: error instanceof Error ? error.message : "Unknown Neo4j health-check error"
-    }, { status: 500 });
+    return apiErrorResponse("Neo4j health check", error);
   } finally {
     await session.close();
   }

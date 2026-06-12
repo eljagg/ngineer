@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   applyApprovedImportFacts,
   createId,
@@ -26,6 +26,26 @@ type CommitState =
   | { status: "working"; message: string }
   | { status: "success"; message: string }
   | { status: "error"; message: string };
+
+type GraphSnapshot = {
+  sites: number;
+  vrfs: number;
+  vlans: number;
+  prefixes: number;
+  addresses: number;
+  importJobs: number;
+  importedFacts: number;
+};
+
+type SnapshotState =
+  | { status: "idle" }
+  | { status: "working" }
+  | { status: "success"; snapshot: GraphSnapshot; fetchedAt: string }
+  | { status: "error"; message: string };
+
+const WORKSPACE_STORAGE_KEY = "ngineer.ipam.workspace.v1";
+const API_TOKEN_STORAGE_KEY = "ngineer.ipam.apiToken";
+const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
 
 const vendorOptions: VendorKind[] = ["Unknown", "Cisco", "Fortinet", "Check Point", "Ubiquiti", "Windows", "Linux"];
 
@@ -139,8 +159,60 @@ export function IpamWorkspace() {
   const [importText, setImportText] = useState("");
   const [sourceName, setSourceName] = useState("pasted-config.txt");
   const [forcedVendor, setForcedVendor] = useState<VendorKind>("Unknown");
-  const [selectedFactIds, setSelectedFactIds] = useState<Set<string>>(new Set());
+  const [apiToken, setApiToken] = useState("");
+  const [snapshotState, setSnapshotState] = useState<SnapshotState>({ status: "idle" });
   const [commitState, setCommitState] = useState<CommitState>({ status: "idle", message: "Approved facts can be committed to Neo4j after review." });
+  const hydrated = useRef(false);
+
+  // Hydrate staged work and API token from localStorage after mount (avoids SSR mismatch).
+  useEffect(() => {
+    try {
+      const savedWorkspace = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+      if (savedWorkspace) {
+        const parsed = JSON.parse(savedWorkspace) as IpamInventory;
+        if (parsed && Array.isArray(parsed.importJobs)) setInventory(parsed);
+      }
+      const savedToken = localStorage.getItem(API_TOKEN_STORAGE_KEY);
+      if (savedToken) setApiToken(savedToken);
+    } catch {
+      // Corrupt or unavailable storage: continue with the demo baseline.
+    }
+    hydrated.current = true;
+  }, []);
+
+  // Persist the workspace (debounced 250ms) so staged imports survive refresh.
+  useEffect(() => {
+    if (!hydrated.current) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(inventory));
+      } catch {
+        // Storage full or blocked: staging continues in memory only.
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [inventory]);
+
+  function updateApiToken(value: string) {
+    setApiToken(value);
+    try {
+      if (value) localStorage.setItem(API_TOKEN_STORAGE_KEY, value);
+      else localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures; token still works for this session.
+    }
+  }
+
+  function resetWorkspace() {
+    setInventory(demoInventory);
+    setSnapshotState({ status: "idle" });
+    setCommitState({ status: "idle", message: "Workspace reset to demo baseline. Staged imports cleared." });
+    try {
+      localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+    } catch {
+      // Ignore.
+    }
+  }
 
   const [siteForm, setSiteForm] = useState({ name: "", region: "", role: "Branch" as SiteRecord["role"] });
   const [vrfForm, setVrfForm] = useState({ name: "", rd: "", description: "" });
@@ -160,7 +232,7 @@ export function IpamWorkspace() {
   function addSite(event: FormEvent) {
     event.preventDefault();
     if (!siteForm.name.trim()) return;
-    const site: SiteRecord = { id: createId("site", siteForm.name), name: siteForm.name.trim(), region: siteForm.region.trim() || "Unknown", role: siteForm.role };
+    const site: SiteRecord = { id: createId("site", siteForm.name), name: siteForm.name.trim(), region: siteForm.region.trim() || "Unknown", role: siteForm.role, origin: "manual" };
     setInventory((current) => ({ ...current, sites: current.sites.some((row) => row.id === site.id) ? current.sites : [...current.sites, site] }));
     setSiteForm({ name: "", region: "", role: "Branch" });
   }
@@ -168,7 +240,7 @@ export function IpamWorkspace() {
   function addVrf(event: FormEvent) {
     event.preventDefault();
     if (!vrfForm.name.trim()) return;
-    const vrf: VrfRecord = { id: createId("vrf", vrfForm.name), name: vrfForm.name.trim(), rd: vrfForm.rd.trim() || undefined, description: vrfForm.description.trim() || "Manually added VRF" };
+    const vrf: VrfRecord = { id: createId("vrf", vrfForm.name), name: vrfForm.name.trim(), rd: vrfForm.rd.trim() || undefined, description: vrfForm.description.trim() || "Manually added VRF", origin: "manual" };
     setInventory((current) => ({ ...current, vrfs: current.vrfs.some((row) => row.id === vrf.id) ? current.vrfs : [...current.vrfs, vrf] }));
     setVrfForm({ name: "", rd: "", description: "" });
   }
@@ -177,7 +249,7 @@ export function IpamWorkspace() {
     event.preventDefault();
     const vlanId = Number(vlanForm.vlanId);
     if (!Number.isInteger(vlanId) || vlanId < 1 || vlanId > 4094) return;
-    const vlan: VlanRecord = { id: createId("vlan", `${vlanForm.siteId}-${vlanId}`), vlanId, name: vlanForm.name.trim() || `VLAN ${vlanId}`, siteId: vlanForm.siteId, vrfId: vlanForm.vrfId };
+    const vlan: VlanRecord = { id: createId("vlan", `${vlanForm.siteId}-${vlanId}`), vlanId, name: vlanForm.name.trim() || `VLAN ${vlanId}`, siteId: vlanForm.siteId, vrfId: vlanForm.vrfId, origin: "manual" };
     setInventory((current) => ({ ...current, vlans: current.vlans.some((row) => row.id === vlan.id) ? current.vlans : [...current.vlans, vlan] }));
     setVlanForm((current) => ({ ...current, vlanId: "", name: "" }));
   }
@@ -185,7 +257,7 @@ export function IpamWorkspace() {
   function addPrefix(event: FormEvent) {
     event.preventDefault();
     if (!prefixForm.cidr.includes("/")) return;
-    const prefix: PrefixRecord = { id: createId("prefix", `${prefixForm.vrfId}-${prefixForm.cidr}`), cidr: prefixForm.cidr.trim(), siteId: prefixForm.siteId, vrfId: prefixForm.vrfId, vlanId: prefixForm.vlanId || undefined, gateway: prefixForm.gateway.trim() || undefined, purpose: prefixForm.purpose.trim() || "Manually added prefix", status: prefixForm.status };
+    const prefix: PrefixRecord = { id: createId("prefix", `${prefixForm.vrfId}-${prefixForm.cidr}`), cidr: prefixForm.cidr.trim(), siteId: prefixForm.siteId, vrfId: prefixForm.vrfId, vlanId: prefixForm.vlanId || undefined, gateway: prefixForm.gateway.trim() || undefined, purpose: prefixForm.purpose.trim() || "Manually added prefix", status: prefixForm.status, origin: "manual" };
     setInventory((current) => ({ ...current, prefixes: current.prefixes.some((row) => row.id === prefix.id) ? current.prefixes : [...current.prefixes, prefix] }));
     setPrefixForm((current) => ({ ...current, cidr: "", gateway: "", purpose: "" }));
   }
@@ -201,7 +273,6 @@ export function IpamWorkspace() {
   function stageImport(text: string, name: string, vendor = forcedVendor) {
     const job = parseImportedConfig(text, name, vendor);
     setInventory((current) => ({ ...current, importJobs: [job, ...current.importJobs] }));
-    setSelectedFactIds(new Set(job.facts.filter((fact) => fact.approved).map((fact) => fact.id)));
     setActiveView("review");
     setCommitState({ status: "idle", message: `${job.facts.length} facts staged from ${job.sourceName}. Review before committing.` });
   }
@@ -223,6 +294,10 @@ export function IpamWorkspace() {
   async function handleFiles(files: FileList | null) {
     if (!files) return;
     for (const file of Array.from(files)) {
+      if (file.size > MAX_IMPORT_FILE_BYTES) {
+        setCommitState({ status: "error", message: `${file.name} is larger than 5 MB and was skipped. Split large evidence files before importing.` });
+        continue;
+      }
       const text = await file.text();
       stageImport(text, file.name);
     }
@@ -236,11 +311,6 @@ export function IpamWorkspace() {
         facts: job.facts.map((fact) => fact.id === factId ? { ...fact, approved: !fact.approved } : fact)
       } : job)
     }));
-    setSelectedFactIds((current) => {
-      const next = new Set(current);
-      if (next.has(factId)) next.delete(factId); else next.add(factId);
-      return next;
-    });
   }
 
   function approveAllFacts(job: ImportJob) {
@@ -248,7 +318,6 @@ export function IpamWorkspace() {
       ...current,
       importJobs: current.importJobs.map((row) => row.id === job.id ? { ...row, facts: row.facts.map((fact) => ({ ...fact, approved: fact.type !== "warning" })) } : row)
     }));
-    setSelectedFactIds((current) => new Set([...current, ...job.facts.filter((fact) => fact.type !== "warning").map((fact) => fact.id)]));
   }
 
   function applyApprovedToIpam() {
@@ -258,18 +327,50 @@ export function IpamWorkspace() {
   }
 
   async function commitToNeo4j() {
+    if (!apiToken.trim()) {
+      setCommitState({ status: "error", message: "Set the IPAM API token first (matches IPAM_API_TOKEN on the server). Demo data is never committed." });
+      return;
+    }
     setCommitState({ status: "working", message: "Committing approved IPAM/import facts to Neo4j..." });
     try {
+      // Demo seed rows are filtered out here and again server-side; they must
+      // never be persisted as source of truth.
+      const commitInventory: IpamInventory = {
+        sites: inventory.sites.filter((row) => row.origin !== "demo"),
+        vrfs: inventory.vrfs.filter((row) => row.origin !== "demo"),
+        vlans: inventory.vlans.filter((row) => row.origin !== "demo"),
+        prefixes: inventory.prefixes.filter((row) => row.origin !== "demo"),
+        addresses: inventory.addresses.filter((row) => row.source !== "demo"),
+        importJobs: inventory.importJobs
+      };
       const response = await fetch("/api/ipam/commit", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inventory, approvedFacts })
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken.trim()}` },
+        body: JSON.stringify({ inventory: commitInventory, approvedFacts })
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "Neo4j commit failed");
-      setCommitState({ status: "success", message: `Committed to Neo4j. Import jobs: ${data.result?.importJobs || 0}, facts: ${data.result?.facts || 0}, prefixes: ${data.result?.prefixes || 0}, addresses: ${data.result?.addresses || 0}.` });
+      setCommitState({ status: "success", message: `Committed to Neo4j. Import jobs: ${data.result?.importJobs || 0}, facts: ${data.result?.facts || 0}, prefixes: ${data.result?.prefixes || 0}, addresses: ${data.result?.addresses || 0}. Demo rows excluded.` });
     } catch (error) {
       setCommitState({ status: "error", message: error instanceof Error ? error.message : "Unknown Neo4j commit error" });
+    }
+  }
+
+  async function fetchGraphSnapshot() {
+    if (!apiToken.trim()) {
+      setSnapshotState({ status: "error", message: "Set the IPAM API token first (Review tab) to read the graph snapshot." });
+      return;
+    }
+    setSnapshotState({ status: "working" });
+    try {
+      const response = await fetch("/api/ipam/snapshot", {
+        headers: { Authorization: `Bearer ${apiToken.trim()}` }
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Snapshot request failed");
+      setSnapshotState({ status: "success", snapshot: data.snapshot as GraphSnapshot, fetchedAt: new Date().toLocaleTimeString() });
+    } catch (error) {
+      setSnapshotState({ status: "error", message: error instanceof Error ? error.message : "Unknown snapshot error" });
     }
   }
 
@@ -324,7 +425,7 @@ export function IpamWorkspace() {
           <strong>Update inventory</strong>
           <small>{inventory.addresses.length} IP assignments tracked</small>
         </article>
-        <article>
+        <article className="ipam-flow-link" onClick={() => setActiveView("review")} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setActiveView("review"); }}>
           <span>4</span>
           <strong>Commit source of truth</strong>
           <small>Neo4j-ready after approval</small>
@@ -409,6 +510,28 @@ export function IpamWorkspace() {
                 <small>{conflict.affected.join(" · ")}</small>
               </div>
             ))}
+
+            <div className="ipam-side-action section">
+              <h2>Neo4j graph snapshot</h2>
+              <button className="btn" type="button" onClick={() => void fetchGraphSnapshot()}>Refresh graph snapshot</button>
+            </div>
+            {snapshotState.status === "idle" && <p>Read back what is actually persisted in Neo4j, so the local workspace and the graph never drift silently. Requires the IPAM API token (set it on the Review tab).</p>}
+            {snapshotState.status === "working" && <p>Reading graph counts from Neo4j...</p>}
+            {snapshotState.status === "error" && <div className="ipam-conflict danger"><strong>Snapshot failed</strong><p>{snapshotState.message}</p></div>}
+            {snapshotState.status === "success" && (
+              <div className="ipam-graph-snapshot">
+                <p>
+                  Sites {snapshotState.snapshot.sites} · VRFs {snapshotState.snapshot.vrfs} · VLANs {snapshotState.snapshot.vlans} · Prefixes {snapshotState.snapshot.prefixes} · IPs {snapshotState.snapshot.addresses} · Import jobs {snapshotState.snapshot.importJobs} · Facts {snapshotState.snapshot.importedFacts}
+                </p>
+                <small>Fetched at {snapshotState.fetchedAt} from the live graph.</small>
+              </div>
+            )}
+
+            <div className="ipam-side-action section">
+              <h2>Local workspace</h2>
+              <button className="btn" type="button" onClick={resetWorkspace}>Reset local workspace</button>
+            </div>
+            <p>Staged imports persist in this browser between refreshes. Reset clears staged work and returns to the demo baseline. Demo rows are never committed to Neo4j.</p>
           </aside>
         </section>
       )}
@@ -561,7 +684,7 @@ Linux: hostnamectl, ip addr, ip route, nmcli, /etc/os-release, netplan`} /></lab
                     <tbody>
                       {job.facts.map((fact) => (
                         <tr key={fact.id}>
-                          <td><input type="checkbox" checked={fact.approved || selectedFactIds.has(fact.id)} onChange={() => toggleFact(job.id, fact.id)} /></td>
+                          <td><input type="checkbox" checked={fact.approved} onChange={() => toggleFact(job.id, fact.id)} /></td>
                           <td><span className={`badge ${fact.confidence === "high" ? "good" : fact.confidence === "medium" ? "warn" : "danger"}`}>{fact.type}</span></td>
                           <td>{fact.label}</td>
                           <td><strong>{fact.value}</strong><span className="subtle-line">{fact.sanitizedEvidence}</span></td>
@@ -578,8 +701,12 @@ Linux: hostnamectl, ip addr, ip route, nmcli, /etc/os-release, netplan`} /></lab
           </div>
 
           <aside className="ipam-side-panel">
-            <h2>Cypher preview</h2>
-            <p>This is a compact preview of the approved facts. The API commit writes structured nodes and relationships to Neo4j.</p>
+            <h2>API access</h2>
+            <p>Commit and snapshot APIs are token-protected. Paste the value of <code>IPAM_API_TOKEN</code> from the server environment. It is stored only in this browser.</p>
+            <label className="field">IPAM API token<input type="password" value={apiToken} onChange={(event) => updateApiToken(event.target.value)} placeholder="Paste IPAM_API_TOKEN value" autoComplete="off" /></label>
+
+            <h2 className="section">Cypher preview</h2>
+            <p>This is a compact preview of the approved facts. The API commit writes structured nodes and relationships to Neo4j. Demo seed rows are always excluded from commits.</p>
             <pre className="codebox mini-code">{buildCypherPreview(approvedFacts)}</pre>
           </aside>
         </section>

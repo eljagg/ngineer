@@ -1,10 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getMissingNeo4jEnv, getServerEnv } from "@/lib/env";
 import { getNeo4jDriver } from "@/lib/neo4j";
+import { apiErrorResponse, requireIpamApiToken } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const unauthorized = requireIpamApiToken(request);
+  if (unauthorized) return unauthorized;
+
   const missing = getMissingNeo4jEnv();
   if (missing.length > 0) {
     return NextResponse.json({ ok: false, error: "Missing Neo4j environment variables", missing }, { status: 400 });
@@ -51,10 +55,7 @@ export async function GET() {
       }
     });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "Unknown IPAM snapshot error" },
-      { status: 500 }
-    );
+    return apiErrorResponse("IPAM snapshot", error);
   } finally {
     await session.close();
   }

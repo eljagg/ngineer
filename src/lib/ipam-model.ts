@@ -19,11 +19,14 @@ export type ImportFactType =
   | "neighbor"
   | "warning";
 
+export type RecordOrigin = "demo" | "manual" | "imported";
+
 export type SiteRecord = {
   id: string;
   name: string;
   region: string;
   role: "HQ" | "Branch" | "Data Center" | "Provider" | "Cloud" | "Unknown";
+  origin?: RecordOrigin;
 };
 
 export type VrfRecord = {
@@ -31,6 +34,7 @@ export type VrfRecord = {
   name: string;
   rd?: string;
   description: string;
+  origin?: RecordOrigin;
 };
 
 export type VlanRecord = {
@@ -39,6 +43,7 @@ export type VlanRecord = {
   name: string;
   siteId: string;
   vrfId: string;
+  origin?: RecordOrigin;
 };
 
 export type PrefixRecord = {
@@ -50,6 +55,7 @@ export type PrefixRecord = {
   gateway?: string;
   purpose: string;
   status: "active" | "reserved" | "planned";
+  origin?: RecordOrigin;
 };
 
 export type IpAddressRecord = {
@@ -111,42 +117,63 @@ export type IpamConflict = {
   affected: string[];
 };
 
-const secretPatterns = [
-  /(enable\s+secret\s+)(\S+)/gi,
-  /(enable\s+password\s+)(\S+)/gi,
-  /(password\s+)(0\s+|7\s+|5\s+|8\s+|9\s+)?(\S+)/gi,
-  /(secret\s+)(0\s+|5\s+|8\s+|9\s+)?(\S+)/gi,
-  /(snmp-server\s+community\s+)(\S+)/gi,
-  /(radius-server\s+key\s+)(\S+)/gi,
-  /(tacacs-server\s+key\s+)(\S+)/gi,
-  /(pre-shared-key\s+)(\S+)/gi,
-  /(set\s+psksecret\s+)(\S+)/gi,
-  /(set\s+passwd\s+)(\S+)/gi,
-  /(set\s+password\s+)(\S+)/gi,
-  /(set\s+key\s+)(\S+)/gi,
-  /(set\s+secret\s+)(\S+)/gi,
-  /(api[-_ ]?key\s*[=:]\s*)(\S+)/gi,
-  /(token\s*[=:]\s*)(\S+)/gi
+// Every pattern captures exactly TWO groups: (kept-prefix)(secret).
+// The replacer keeps group 1 and replaces group 2 with <redacted>.
+// Rules: word-boundary anchor every keyword (prevents mid-word matches like
+// "MyOspfSecret"), and use [ \t]+ separators only (never \s+, which crosses
+// newlines and redacts the first word of the next line). Do not add
+// three-group patterns: extra replacer args receive the match offset, which
+// previously caused secrets to be kept instead of redacted.
+const secretPatterns: RegExp[] = [
+  /(\benable[ \t]+secret[ \t]+(?:[0-9][ \t]+)?)(\S+)/gi,
+  /(\benable[ \t]+password[ \t]+(?:[0-9][ \t]+)?)(\S+)/gi,
+  /(\bpassword[ \t]+(?:[05789][ \t]+|ENC[ \t]+)?)(\S+)/gi,
+  /(\bsecret[ \t]+(?:[0589][ \t]+|ENC[ \t]+)?)(\S+)/gi,
+  /(\bsnmp-server[ \t]+community[ \t]+)(\S+)/gi,
+  /(\bradius-server[ \t]+key[ \t]+(?:[067][ \t]+)?)(\S+)/gi,
+  /(\btacacs-server[ \t]+key[ \t]+(?:[067][ \t]+)?)(\S+)/gi,
+  /(\bpre-shared-key[ \t]+(?:local[ \t]+|remote[ \t]+)?(?:[06][ \t]+)?)(\S+)/gi,
+  // Fortinet/VyOS PSKs, e.g. "set psksecret ENC xxxx" / "ike psksecret ENC xxxx"
+  /(\bpsksecret[ \t]+(?:ENC[ \t]+)?)(\S+)/gi,
+  /(\bset[ \t]+passwd[ \t]+(?:ENC[ \t]+)?)(\S+)/gi,
+  /(\bset[ \t]+key[ \t]+(?:ENC[ \t]+)?)(\S+)/gi,
+  /(\bset[ \t]+secret[ \t]+(?:ENC[ \t]+)?)(\S+)/gi,
+  /(\bapi[-_ ]?key[ \t]*[=:][ \t]*)(\S+)/gi,
+  /(\btoken[ \t]*[=:][ \t]*)(\S+)/gi,
+  // Typed bare key lines inside new-style Cisco tacacs/radius server blocks, e.g. "key 7 0822455D0A16"
+  /(^[ \t]*key[ \t]+[067][ \t]+)(\S+)/gim,
+  // Key-chain key-string entries, e.g. "key-string 7 104D000A0618"
+  /(\bkey-string[ \t]+(?:[07][ \t]+)?)(\S+)/gi,
+  // OSPF interface MD5 auth, e.g. "ip ospf message-digest-key 1 md5 SECRET"
+  /(\bmessage-digest-key[ \t]+\d+[ \t]+md5[ \t]+(?:[07][ \t]+)?)(\S+)/gi,
+  // Site-to-site VPN PSKs, e.g. "crypto isakmp key SECRET address 1.2.3.4"
+  /(\bcrypto[ \t]+isakmp[ \t]+key[ \t]+(?:[06][ \t]+)?)(\S+)/gi,
+  // NTP authentication, e.g. "ntp authentication-key 1 md5 SECRET"
+  /(\bntp[ \t]+authentication-key[ \t]+\d+[ \t]+md5[ \t]+)(\S+)/gi,
+  // HSRP/VRRP plain-text auth, e.g. "standby 1 authentication text SECRET"
+  /(\bauthentication[ \t]+text[ \t]+)(\S+)/gi
 ];
+
+const pemBlockPattern = /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g;
 
 export const demoInventory: IpamInventory = {
   sites: [
-    { id: "site-branch", name: "Branch", region: "Jamaica", role: "Branch" },
-    { id: "site-hq", name: "HQ", region: "Jamaica", role: "HQ" },
-    { id: "site-provider", name: "Provider MPLS", region: "Service Provider", role: "Provider" }
+    { id: "site-branch", name: "Branch", region: "Jamaica", role: "Branch", origin: "demo" },
+    { id: "site-hq", name: "HQ", region: "Jamaica", role: "HQ", origin: "demo" },
+    { id: "site-provider", name: "Provider MPLS", region: "Service Provider", role: "Provider", origin: "demo" }
   ],
   vrfs: [
-    { id: "vrf-cust-a", name: "CUST-A", rd: "65000:100", description: "Customer production VPN / corporate routing domain" },
-    { id: "vrf-global", name: "Global", description: "Provider/global transport table" }
+    { id: "vrf-cust-a", name: "CUST-A", rd: "65000:100", description: "Customer production VPN / corporate routing domain", origin: "demo" },
+    { id: "vrf-global", name: "Global", description: "Provider/global transport table", origin: "demo" }
   ],
   vlans: [
-    { id: "vlan-20", vlanId: 20, name: "Branch-Users", siteId: "site-branch", vrfId: "vrf-cust-a" },
-    { id: "vlan-120", vlanId: 120, name: "HQ-Database", siteId: "site-hq", vrfId: "vrf-cust-a" }
+    { id: "vlan-20", vlanId: 20, name: "Branch-Users", siteId: "site-branch", vrfId: "vrf-cust-a", origin: "demo" },
+    { id: "vlan-120", vlanId: 120, name: "HQ-Database", siteId: "site-hq", vrfId: "vrf-cust-a", origin: "demo" }
   ],
   prefixes: [
-    { id: "prefix-10-20-30", cidr: "10.20.30.0/24", siteId: "site-branch", vrfId: "vrf-cust-a", vlanId: "vlan-20", gateway: "10.20.30.1", purpose: "Branch user access", status: "active" },
-    { id: "prefix-10-120-10", cidr: "10.120.10.0/24", siteId: "site-hq", vrfId: "vrf-cust-a", vlanId: "vlan-120", gateway: "10.120.10.1", purpose: "HQ database segment", status: "active" },
-    { id: "prefix-172-16-0", cidr: "172.16.0.0/30", siteId: "site-provider", vrfId: "vrf-global", purpose: "Provider PE-P core link", status: "active" }
+    { id: "prefix-10-20-30", cidr: "10.20.30.0/24", siteId: "site-branch", vrfId: "vrf-cust-a", vlanId: "vlan-20", gateway: "10.20.30.1", purpose: "Branch user access", status: "active", origin: "demo" },
+    { id: "prefix-10-120-10", cidr: "10.120.10.0/24", siteId: "site-hq", vrfId: "vrf-cust-a", vlanId: "vlan-120", gateway: "10.120.10.1", purpose: "HQ database segment", status: "active", origin: "demo" },
+    { id: "prefix-172-16-0", cidr: "172.16.0.0/30", siteId: "site-provider", vrfId: "vrf-global", purpose: "Provider PE-P core link", status: "active", origin: "demo" }
   ],
   addresses: [
     { id: "ip-10-20-30-1", address: "10.20.30.1", prefixId: "prefix-10-20-30", vrfId: "vrf-cust-a", siteId: "site-branch", device: "BR-CE-01", interfaceName: "Gi0/0/1.20", role: "gateway", source: "demo" },
@@ -169,12 +196,9 @@ export function createId(prefix: string, value: string): string {
 }
 
 export function sanitizeConfigText(text: string): string {
-  let sanitized = text;
+  let sanitized = text.replace(pemBlockPattern, "<redacted-pem-block>");
   for (const pattern of secretPatterns) {
-    sanitized = sanitized.replace(pattern, (_match, first = "", second = "", third = "") => {
-      if (third) return `${first}${second || ""}<redacted>`;
-      return `${first}<redacted>`;
-    });
+    sanitized = sanitized.replace(pattern, (_match, keptPrefix: string) => `${keptPrefix}<redacted>`);
   }
   return sanitized;
 }
@@ -1946,13 +1970,13 @@ export function applyApprovedImportFacts(inventory: IpamInventory, facts: Import
 
   for (const fact of facts.filter((item) => item.approved)) {
     if (fact.type === "vrf" && fact.value && !next.vrfs.some((vrf) => vrf.name === fact.value)) {
-      next.vrfs.push({ id: createId("vrf", fact.value), name: fact.value, description: `Imported from ${fact.sourceFile}` });
+      next.vrfs.push({ id: createId("vrf", fact.value), name: fact.value, description: `Imported from ${fact.sourceFile}`, origin: "imported" });
     }
 
     if (fact.type === "vlan" && fact.vlan) {
       const vlanId = Number(fact.vlan);
       if (Number.isInteger(vlanId) && !next.vlans.some((vlan) => vlan.vlanId === vlanId && vlan.siteId === defaultSite)) {
-        next.vlans.push({ id: createId("vlan", `${defaultSite}-${vlanId}`), vlanId, name: `Imported VLAN ${vlanId}`, siteId: defaultSite, vrfId: defaultVrf });
+        next.vlans.push({ id: createId("vlan", `${defaultSite}-${vlanId}`), vlanId, name: `Imported VLAN ${vlanId}`, siteId: defaultSite, vrfId: defaultVrf, origin: "imported" });
       }
     }
 
@@ -1966,7 +1990,8 @@ export function applyApprovedImportFacts(inventory: IpamInventory, facts: Import
         vlanId: vlan?.id,
         gateway: fact.ip,
         purpose: `Imported from ${fact.device || fact.vendor}`,
-        status: "active"
+        status: "active",
+        origin: "imported"
       });
     }
 
