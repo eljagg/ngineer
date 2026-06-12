@@ -28,6 +28,7 @@ import {
 } from "@xyflow/react";
 import ELK from "elkjs/lib/elk.bundled.js";
 import { devices, links, type DeviceNode, type DeviceRole, type NetworkLink } from "@/lib/network-seed";
+import { FirewallGlyph, MultilayerGlyph, RouterGlyph, ServerGlyph, SwitchGlyph } from "@/components/DeviceGlyphs";
 
 type DeviceKind = "switch" | "router" | "core" | "firewall" | "server";
 type LayoutDirection = "RIGHT" | "DOWN";
@@ -227,47 +228,12 @@ function buildEdges(showPorts: boolean, activePath: boolean): NetworkFlowEdge[] 
   });
 }
 
-function RackDeviceIcon({ kind, device }: { kind: DeviceKind; device: DeviceNode }) {
-  const portCount = kind === "switch" ? 24 : kind === "firewall" ? 8 : kind === "server" ? 12 : 10;
-  const rows = kind === "switch" ? 2 : 1;
-  const portItems = Array.from({ length: portCount });
-
-  return (
-    <svg viewBox="0 0 270 138" className={`rf-device-svg rf-device-svg-${kind}`} aria-hidden="true">
-      <defs>
-        <linearGradient id={`rfBody-${device.id}`} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor={kind === "firewall" ? "#704319" : kind === "server" ? "#15543a" : kind === "core" ? "#403a74" : "#1d4c73"} />
-          <stop offset="46%" stopColor="#0f1d31" />
-          <stop offset="100%" stopColor="#030712" />
-        </linearGradient>
-        <linearGradient id={`rfFace-${device.id}`} x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="rgba(148,163,184,0.28)" />
-          <stop offset="45%" stopColor="rgba(15,23,42,0.86)" />
-          <stop offset="100%" stopColor="rgba(2,6,23,0.96)" />
-        </linearGradient>
-      </defs>
-      <path className="rf-device-shadow" d="M31 32h182l31 23-14 56H49L20 84z" />
-      <path className="rf-device-chassis" d="M27 23h185l35 25-16 57H45L15 77z" fill={`url(#rfBody-${device.id})`} />
-      <path className="rf-device-top" d="M28 23h184l35 25H61z" />
-      <rect className="rf-faceplate" x="49" y="51" width="151" height="36" rx="5" fill={`url(#rfFace-${device.id})`} />
-      {kind === "server" ? (
-        portItems.map((_, index) => <rect className="rf-drive" key={index} x={58 + index * 11.6} y="55" width="8" height="26" rx="2" />)
-      ) : (
-        portItems.map((_, index) => {
-          const row = rows === 2 ? index % 2 : 0;
-          const col = rows === 2 ? Math.floor(index / 2) : index;
-          return <rect className="rf-rj45" key={index} x={58 + col * 10.2} y={57 + row * 14} width="7" height="8" rx="1.5" />;
-        })
-      )}
-      {kind === "firewall" ? <path className="rf-shield" d="M222 48l23 10v18c0 15-10 25-23 31-14-7-23-16-23-31V58z" /> : null}
-      {kind === "router" || kind === "core" ? <path className="rf-route-arrows" d="M203 67h43M219 54l-16 13 16 13M231 54l15 13-15 13" /> : null}
-      <text x="57" y="101" className="rf-device-svg-label">{device.vendor}</text>
-      <text x="174" y="101" className="rf-device-svg-model">{device.model}</text>
-      <circle className="rf-led rf-led-green" cx="42" cy="94" r="3.2" />
-      <circle className="rf-led rf-led-blue" cx="54" cy="94" r="2.6" />
-      <circle className={kind === "firewall" ? "rf-led rf-led-amber" : "rf-led"} cx="66" cy="94" r="2.4" />
-    </svg>
-  );
+function RackDeviceIcon({ kind }: { kind: DeviceKind; device: DeviceNode }) {
+  if (kind === "switch") return <SwitchGlyph />;
+  if (kind === "firewall") return <FirewallGlyph />;
+  if (kind === "server") return <ServerGlyph />;
+  if (kind === "core") return <MultilayerGlyph />;
+  return <RouterGlyph />;
 }
 
 function NetworkDeviceNode({ data, selected }: NodeProps<NetworkFlowNode>) {

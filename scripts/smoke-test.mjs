@@ -17,6 +17,7 @@ const requiredFiles = [
   "src/components/IpamWorkspace.tsx",
   "src/lib/ipam-model.ts",
   "src/lib/api-auth.ts",
+  "src/components/DeviceGlyphs.tsx",
   "src/app/api/ipam/commit/route.ts",
   "src/app/api/ipam/snapshot/route.ts",
   ".github/workflows/neo4j-keepalive.yml"
@@ -37,7 +38,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.10.2") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.10.3") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -174,4 +175,26 @@ for (const marker of [
   }
 }
 
-console.log("Smoke test passed: NGINEER v0.1.10.2 security hardening and IPAM workspace files are present.");
+const deviceGlyphs = readFileSync("src/components/DeviceGlyphs.tsx", "utf8");
+for (const glyph of ["RouterGlyph", "SwitchGlyph", "MultilayerGlyph", "FirewallGlyph", "ServerGlyph", "affinity-glyph"]) {
+  if (!deviceGlyphs.includes(glyph)) {
+    console.error(`DeviceGlyphs is missing expected glyph: ${glyph}`);
+    process.exit(1);
+  }
+}
+
+const globalsCss = readFileSync("src/app/globals.css", "utf8");
+for (const banned of ["@keyframes linkFlow", "@keyframes rfEdgeFlow", "canvas-zone-label {", "canvas-watermark {"]) {
+  if (globalsCss.includes(banned)) {
+    console.error(`globals.css still contains removed style: ${banned}`);
+    process.exit(1);
+  }
+}
+
+const homePage = readFileSync("src/app/page.tsx", "utf8");
+if (homePage.includes("Build, trace, and validate") || !homePage.includes("network-max-canvas")) {
+  console.error("Dashboard must be the full-height canvas without the hero wording");
+  process.exit(1);
+}
+
+console.log("Smoke test passed: NGINEER v0.1.10.3 canvas layout, Affinity glyphs, and security files are present.");

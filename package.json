@@ -1,6 +1,6 @@
 {
   "name": "ngineer",
-  "version": "0.1.10.2",
+  "version": "0.1.10.3",
   "private": true,
   "description": "Visual AI-powered network engineering assistant, source of truth, IPAM, config builder, and traffic path analyzer.",
   "scripts": {
