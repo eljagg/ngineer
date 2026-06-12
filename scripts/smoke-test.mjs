@@ -36,7 +36,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.10") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.10.1") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -75,7 +75,7 @@ if (!networkPage.includes("NetworkFlowCanvas") || !networkPage.includes("network
 }
 
 const ipamWorkspace = readFileSync("src/components/IpamWorkspace.tsx", "utf8");
-for (const marker of ["Upload files", "Commit to Neo4j", "Apply approved locally", "Export IP CSV", "Review discovered facts"]) {
+for (const marker of ["Upload evidence files", "Commit to Neo4j", "Apply approved locally", "Export IP CSV", "Review discovered facts", "IPAM command center", "Parser coverage", "Load Windows sample", "Load Linux sample", "Stage pasted evidence"]) {
   if (!ipamWorkspace.includes(marker)) {
     console.error(`IpamWorkspace is missing expected IPAM marker: ${marker}`);
     process.exit(1);
@@ -124,4 +124,4 @@ for (const marker of [
   }
 }
 
-console.log("Smoke test passed: NGINEER v0.1.10 Windows/Linux server parser files are present.");
+console.log("Smoke test passed: NGINEER v0.1.10.1 IPAM import workspace files are present.");

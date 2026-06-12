@@ -29,6 +29,70 @@ type CommitState =
 
 const vendorOptions: VendorKind[] = ["Unknown", "Cisco", "Fortinet", "Check Point", "Ubiquiti", "Windows", "Linux"];
 
+const parserCoverage = [
+  { name: "Cisco", detail: "running-config, VLANs, trunks, routes, OSPF/BGP, CDP/LLDP links" },
+  { name: "Fortinet", detail: "interfaces, zones, policies, address objects, routes, DHCP, BGP, IPsec" },
+  { name: "Windows", detail: "ipconfig, route print, systeminfo, NetIP/DNS/DHCP PowerShell outputs" },
+  { name: "Linux", detail: "ip addr, ip route, hostnamectl, os-release, NetworkManager, ifcfg, netplan" }
+];
+
+const sampleImports = {
+  windows: {
+    label: "Load Windows sample",
+    sourceName: "windows-server-sample.txt",
+    vendor: "Windows" as VendorKind,
+    text: `Windows IP Configuration
+
+   Host Name . . . . . . . . . . . . : WIN-DC-01
+   Primary Dns Suffix  . . . . . . . : corp.local
+
+Ethernet adapter Ethernet0:
+
+   Description . . . . . . . . . . . : Intel(R) Ethernet Connection
+   DHCP Enabled. . . . . . . . . . . : No
+   IPv4 Address. . . . . . . . . . . : 10.120.10.15(Preferred)
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 10.120.10.1
+   DNS Servers . . . . . . . . . . . : 10.120.10.10
+                                       10.120.10.11
+
+===========================================================================
+IPv4 Route Table
+===========================================================================
+Network Destination        Netmask          Gateway       Interface  Metric
+          0.0.0.0          0.0.0.0       10.120.10.1     10.120.10.15     25
+       10.120.10.0    255.255.255.0         On-link      10.120.10.15    281
+
+ScopeId      SubnetMask      Name        StartRange       EndRange
+10.120.30.0  255.255.255.0   BRANCH-DHCP 10.120.30.50    10.120.30.220`
+  },
+  linux: {
+    label: "Load Linux sample",
+    sourceName: "linux-server-sample.txt",
+    vendor: "Linux" as VendorKind,
+    text: `hostnamectl
+   Static hostname: linux-app-01
+ Operating System: Ubuntu 24.04.2 LTS
+
+2: ens192: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+    inet 10.120.20.25/24 brd 10.120.20.255 scope global ens192
+       valid_lft forever preferred_lft forever
+
+ip route
+default via 10.120.20.1 dev ens192 proto static src 10.120.20.25
+10.120.20.0/24 dev ens192 proto kernel scope link src 10.120.20.25
+
+GENERAL.DEVICE: ens192
+IP4.ADDRESS[1]: 10.120.20.25/24
+IP4.GATEWAY: 10.120.20.1
+IP4.DNS[1]: 10.120.10.10
+IP4.DNS[2]: 10.120.10.11
+
+NAME="Ubuntu"
+VERSION="24.04.2 LTS (Noble Numbat)"`
+  }
+};
+
 function findName<T extends { id: string; name: string }>(rows: T[], id?: string): string {
   return rows.find((row) => row.id === id)?.name || "Unassigned";
 }
@@ -71,7 +135,7 @@ function buildCypherPreview(facts: ImportFact[]): string {
 
 export function IpamWorkspace() {
   const [inventory, setInventory] = useState<IpamInventory>(demoInventory);
-  const [activeView, setActiveView] = useState<ActiveView>("inventory");
+  const [activeView, setActiveView] = useState<ActiveView>("import");
   const [importText, setImportText] = useState("");
   const [sourceName, setSourceName] = useState("pasted-config.txt");
   const [forcedVendor, setForcedVendor] = useState<VendorKind>("Unknown");
@@ -87,6 +151,8 @@ export function IpamWorkspace() {
   const conflicts = useMemo(() => findIpamConflicts(inventory), [inventory]);
   const approvedFacts = useMemo(() => inventory.importJobs.flatMap((job) => job.facts).filter((fact) => fact.approved), [inventory.importJobs]);
   const allFacts = useMemo(() => inventory.importJobs.flatMap((job) => job.facts), [inventory.importJobs]);
+  const warningFacts = useMemo(() => allFacts.filter((fact) => fact.type === "warning"), [allFacts]);
+  const latestImport = inventory.importJobs[0];
   const totalUsable = inventory.prefixes.reduce((sum, prefix) => sum + getPrefixUtilization(prefix, inventory.addresses).usable, 0);
   const totalUsed = inventory.addresses.length;
   const utilization = totalUsable > 0 ? Math.min(100, Math.round((totalUsed / totalUsable) * 100)) : 0;
@@ -143,6 +209,15 @@ export function IpamWorkspace() {
   function stagePastedImport() {
     if (!importText.trim()) return;
     stageImport(importText, sourceName || "pasted-config.txt");
+  }
+
+  function loadSampleImport(kind: keyof typeof sampleImports) {
+    const sample = sampleImports[kind];
+    setSourceName(sample.sourceName);
+    setForcedVendor(sample.vendor);
+    setImportText(sample.text.trim());
+    setActiveView("import");
+    setCommitState({ status: "idle", message: `${sample.label.replace("Load ", "")} loaded. Click Stage pasted evidence to create reviewable facts.` });
   }
 
   async function handleFiles(files: FileList | null) {
@@ -213,24 +288,47 @@ export function IpamWorkspace() {
 
   return (
     <div className="ipam-shell">
-      <section className="ipam-command-row">
+      <section className="ipam-command-row ipam-command-row-compact">
         <div>
-          <div className="eyebrow">Full IPAM foundation</div>
-          <h1>Build the source of truth from manual entries and uploaded configs.</h1>
+          <div className="eyebrow">IPAM command center</div>
+          <h1>Import, validate, and commit network/server facts.</h1>
           <p className="lead compact-lead">
-            Track sites, VRFs, VLANs, prefixes, IPs, interfaces, imported facts, conflicts, and Neo4j commits from one workspace.
+            Paste device configs or server command outputs, review parsed facts, then approve them into the NGINEER source of truth.
           </p>
         </div>
         <div className="ipam-mode-switch" aria-label="IPAM workspace sections">
           {([
+            ["import", `Import evidence`],
+            ["review", `Review (${allFacts.length})`],
             ["inventory", "Inventory"],
-            ["manual", "Manual entry"],
-            ["import", "Import configs"],
-            ["review", `Review (${allFacts.length})`]
+            ["manual", "Manual entry"]
           ] as const).map(([key, label]) => (
             <button className={activeView === key ? "active" : ""} key={key} onClick={() => setActiveView(key)} type="button">{label}</button>
           ))}
         </div>
+      </section>
+
+      <section className="ipam-flow-strip" aria-label="IPAM import workflow">
+        <article className={activeView === "import" ? "active" : ""}>
+          <span>1</span>
+          <strong>Import evidence</strong>
+          <small>Cisco, Fortinet, Windows, Linux outputs</small>
+        </article>
+        <article className={activeView === "review" ? "active" : ""}>
+          <span>2</span>
+          <strong>Review facts</strong>
+          <small>{allFacts.length} staged · {warningFacts.length} warnings</small>
+        </article>
+        <article className={activeView === "inventory" ? "active" : ""}>
+          <span>3</span>
+          <strong>Update inventory</strong>
+          <small>{inventory.addresses.length} IP assignments tracked</small>
+        </article>
+        <article>
+          <span>4</span>
+          <strong>Commit source of truth</strong>
+          <small>Neo4j-ready after approval</small>
+        </article>
       </section>
 
       <section className="ipam-kpi-grid section">
@@ -300,7 +398,10 @@ export function IpamWorkspace() {
           </div>
 
           <aside className="ipam-side-panel">
-            <h2>Validation</h2>
+            <div className="ipam-side-action">
+              <h2>Validation</h2>
+              <button className="btn" type="button" onClick={() => setActiveView("import")}>Import evidence</button>
+            </div>
             {conflicts.length === 0 ? <p>No duplicate IPs, overlaps, or gateway placement errors detected in the current inventory.</p> : conflicts.map((conflict) => (
               <div className={`ipam-conflict ${conflict.severity}`} key={conflict.id}>
                 <strong>{conflict.title}</strong>
@@ -363,32 +464,64 @@ export function IpamWorkspace() {
       )}
 
       {activeView === "import" && (
-        <section className="ipam-import-layout section">
-          <div className="ipam-import-panel">
-            <h2>Upload or paste existing infrastructure evidence</h2>
-            <p>Stage Cisco, Fortinet, Check Point, Ubiquiti, Windows, and Linux configs or command outputs. NGINEER sanitizes secrets before previewing and stages facts for approval.</p>
-            <div className="form-grid">
-              <label className="field">Source name<input value={sourceName} onChange={(event) => setSourceName(event.target.value)} /></label>
-              <label className="field">Vendor<select value={forcedVendor} onChange={(event) => setForcedVendor(event.target.value as VendorKind)}>{vendorOptions.map((vendor) => <option key={vendor}>{vendor}</option>)}</select></label>
+        <section className="ipam-import-layout section ipam-import-layout-upgraded">
+          <div className="ipam-import-panel ipam-import-command-panel">
+            <div className="panel-heading flat-heading">
+              <div>
+                <div className="eyebrow">Evidence intake</div>
+                <h2>Paste or upload outputs, then stage reviewable facts</h2>
+              </div>
+              <span className="badge good">v0.1.10 parser active</span>
             </div>
-            <label className="field section">Config / output text<textarea value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="Paste running-config, show outputs, ipconfig /all, ip addr, FortiGate backup, Check Point export, UniFi config export..." /></label>
-            <div className="actions">
-              <button className="btn primary" type="button" onClick={stagePastedImport}>Stage pasted config</button>
-              <label className="btn file-btn">Upload files<input type="file" multiple onChange={(event) => void handleFiles(event.target.files)} /></label>
+            <p className="ipam-panel-lead">
+              NGINEER does not blindly add imported data. It extracts candidate facts, sanitizes evidence, and sends them to Review for approval before local inventory or Neo4j commit.
+            </p>
+
+            <div className="ipam-sample-row" aria-label="Load sample imports">
+              <button className="btn" type="button" onClick={() => loadSampleImport("windows")}>Load Windows sample</button>
+              <button className="btn" type="button" onClick={() => loadSampleImport("linux")}>Load Linux sample</button>
+            </div>
+
+            <div className="form-grid ipam-import-fields">
+              <label className="field">Source name<input value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder="edge-fw-01-backup.conf or win-dc-01-ipconfig.txt" /></label>
+              <label className="field">Parser hint<select value={forcedVendor} onChange={(event) => setForcedVendor(event.target.value as VendorKind)}>{vendorOptions.map((vendor) => <option key={vendor}>{vendor}</option>)}</select></label>
+            </div>
+            <label className="field section">Config / command output text<textarea value={importText} onChange={(event) => setImportText(event.target.value)} placeholder={`Paste evidence here, for example:
+
+Cisco: show running-config, show ip interface brief, show vlan brief, show cdp neighbors detail
+Fortinet: config system interface, config firewall policy, config router static
+Windows: ipconfig /all, route print, systeminfo, Get-NetIPConfiguration
+Linux: hostnamectl, ip addr, ip route, nmcli, /etc/os-release, netplan`} /></label>
+            <div className="actions ipam-import-actions">
+              <button className="btn primary" type="button" onClick={stagePastedImport}>Stage pasted evidence</button>
+              <label className="btn file-btn">Upload evidence files<input type="file" multiple onChange={(event) => void handleFiles(event.target.files)} /></label>
+              <button className="btn" type="button" onClick={() => setActiveView("review")}>Open review queue ({allFacts.length})</button>
             </div>
           </div>
 
-          <aside className="ipam-side-panel">
-            <h2>What NGINEER extracts now</h2>
-            <ul className="ipam-checklist">
-              <li>Hostnames and device records</li>
-              <li>Interfaces and possible peer descriptions</li>
-              <li>IPv4 addresses and connected prefixes</li>
-              <li>VLANs, SVIs, and VRF hints</li>
-              <li>Windows/Linux NIC and route clues</li>
-              <li>Fortinet interface and policy clues</li>
-              <li>Sanitized evidence only; secrets are redacted</li>
-            </ul>
+          <aside className="ipam-side-panel ipam-parser-panel">
+            <h2>Parser coverage</h2>
+            <div className="ipam-parser-card-list">
+              {parserCoverage.map((parser) => (
+                <article key={parser.name}>
+                  <strong>{parser.name}</strong>
+                  <span>{parser.detail}</span>
+                </article>
+              ))}
+            </div>
+
+            <div className="ipam-latest-import">
+              <div className="eyebrow">Current queue</div>
+              {latestImport ? (
+                <>
+                  <strong>{latestImport.sourceName}</strong>
+                  <span>{latestImport.vendor} · {latestImport.facts.length} staged facts</span>
+                  <button className="btn" type="button" onClick={() => setActiveView("review")}>Review latest import</button>
+                </>
+              ) : (
+                <p>No import jobs staged yet. Paste output or upload files to begin.</p>
+              )}
+            </div>
           </aside>
         </section>
       )}
@@ -409,7 +542,14 @@ export function IpamWorkspace() {
 
             <div className={`ipam-commit-state ${commitState.status}`}>{commitState.message}</div>
 
-            {inventory.importJobs.length === 0 ? <p>No import jobs staged yet.</p> : inventory.importJobs.map((job) => (
+            {inventory.importJobs.length === 0 ? (
+              <div className="ipam-empty-state">
+                <div className="eyebrow">No staged evidence</div>
+                <h3>Import configs or server outputs first.</h3>
+                <p>Use Import evidence to paste Cisco/Fortinet configs, Windows outputs, or Linux command results. NGINEER will stage parsed facts here for approval.</p>
+                <button className="btn primary" type="button" onClick={() => setActiveView("import")}>Go to import evidence</button>
+              </div>
+            ) : inventory.importJobs.map((job) => (
               <article className="import-job" key={job.id}>
                 <div className="import-job-head">
                   <div><strong>{job.sourceName}</strong><span>{job.vendor} · {job.facts.length} facts · {new Date(job.createdAt).toLocaleString()}</span></div>
