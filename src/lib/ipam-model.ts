@@ -128,6 +128,8 @@ const secretPatterns: RegExp[] = [
   /(\benable[ \t]+secret[ \t]+(?:[0-9][ \t]+)?)(\S+)/gi,
   /(\benable[ \t]+password[ \t]+(?:[0-9][ \t]+)?)(\S+)/gi,
   /(\bpassword[ \t]+(?:[05789][ \t]+|ENC[ \t]+)?)(\S+)/gi,
+  /(\bpassword-hash[ \t]+)(\S+)/gi,
+  /(\bexpert-password(?:-hash)?[ \t]+)(\S+)/gi,
   /(\bsecret[ \t]+(?:[0589][ \t]+|ENC[ \t]+)?)(\S+)/gi,
   /(\bsnmp-server[ \t]+community[ \t]+)(\S+)/gi,
   /(\bradius-server[ \t]+key[ \t]+(?:[067][ \t]+)?)(\S+)/gi,
@@ -208,7 +210,7 @@ export function detectVendor(text: string, fileName = ""): VendorKind {
 
   if (/fortigate|fortios|config firewall|config system interface|set allowaccess/.test(haystack)) return "Fortinet";
   if (/checkpoint|check point|clish|fw ctl|set interface .* ipv4-address|gaia/.test(haystack)) return "Check Point";
-  if (/unifi|ubiquiti|edgeos|interfaces ethernet|ubnt|switch-port profile/.test(haystack)) return "Ubiquiti";
+  if (/unifi|ubiquiti|edgeos|interfaces ethernet|ubnt|switch-port profile|config\.boot|ethernet eth\d+\s*\{|host-name\s/.test(haystack)) return "Ubiquiti";
   if (/windows ip configuration|ethernet adapter|get-netipconfiguration|dhcp server|active directory/.test(haystack)) return "Windows";
   if (/linux|ubuntu|red hat|rhel|centos|oracle linux|inet\s+\d+\.\d+\.\d+\.\d+\/\d+|networkmanager|netplan/.test(haystack)) return "Linux";
   if (/^hostname\s+\S+/m.test(text) || /interface\s+(gigabitethernet|tengigabitethernet|fastethernet|vlan|loopback|port-channel)/i.test(text) || /show ip interface brief/i.test(text)) return "Cisco";
@@ -349,6 +351,8 @@ function extractHostname(text: string, vendor: VendorKind): string | undefined {
   if (cisco) return cisco;
   const fortinet = text.match(/set\s+hostname\s+"?([^"\n]+)"?/i)?.[1];
   if (fortinet) return fortinet.trim();
+  const ubiquiti = text.match(/host-name\s+"?([A-Za-z0-9._-]+)"?/i)?.[1];
+  if (ubiquiti) return ubiquiti;
   const linux = text.match(/^hostname\s*[:=]?\s*(\S+)/im)?.[1] || text.match(/^\s*Static hostname:\s*(\S+)/im)?.[1];
   if (linux) return linux;
   const windows = text.match(/^\s*Host Name\s*\.\s*\.\s*\.\s*\.\s*\.\s*\.\s*:\s*(.+)$/im)?.[1];
@@ -1858,6 +1862,346 @@ function parseLinuxFacts({ rawText, sourceFile, hostname, facts }: ServerParserC
 }
 
 
+
+type GaiaUbntParserContext = {
+  rawText: string;
+  sourceFile: string;
+  hostname: string | undefined;
+  facts: ImportFact[];
+};
+
+/** Check Point Gaia clish "set ..." configuration parser. */
+function parseCheckPointFacts({ rawText, sourceFile, hostname, facts }: GaiaUbntParserContext) {
+  // Interfaces with addresses: set interface eth0 ipv4-address 10.1.1.1 mask-length 24
+  const addressPattern = /^set\s+interface\s+(\S+)\s+ipv4-address\s+(\d+\.\d+\.\d+\.\d+)\s+mask-length\s+(\d+)/gim;
+  for (const match of rawText.matchAll(addressPattern)) {
+    const [, interfaceName, ip, maskLength] = match;
+    const cidr = derivePrefixFromIp(ip, maskLength) || undefined;
+
+    pushFact(facts, {
+      type: "interface",
+      vendor: "Check Point",
+      label: "Check Point interface",
+      value: interfaceName,
+      device: hostname,
+      interfaceName,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0])
+    });
+
+    pushFact(facts, {
+      type: "ip-address",
+      vendor: "Check Point",
+      label: "Check Point interface address",
+      value: `${ip}/${maskLength}`,
+      device: hostname,
+      interfaceName,
+      ip,
+      cidr,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0])
+    });
+
+    if (cidr) {
+      pushFact(facts, {
+        type: "prefix",
+        vendor: "Check Point",
+        label: "Check Point connected prefix",
+        value: cidr,
+        device: hostname,
+        interfaceName,
+        cidr,
+        prefix: cidr,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: sanitizeConfigText(match[0])
+      });
+    }
+  }
+
+  // Interface descriptions: set interface eth0 comments "External uplink"
+  const commentPattern = /^set\s+interface\s+(\S+)\s+comments?\s+"?([^"\n]+)"?/gim;
+  for (const match of rawText.matchAll(commentPattern)) {
+    pushFact(facts, {
+      type: "neighbor",
+      vendor: "Check Point",
+      label: "Check Point interface description",
+      value: `${match[1]}: ${match[2].trim()}`,
+      device: hostname,
+      interfaceName: match[1],
+      confidence: "medium",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0])
+    });
+  }
+
+  // Disabled interfaces: set interface eth3 state off
+  const statePattern = /^set\s+interface\s+(\S+)\s+state\s+off/gim;
+  for (const match of rawText.matchAll(statePattern)) {
+    pushFact(facts, {
+      type: "warning",
+      vendor: "Check Point",
+      label: "Check Point interface administratively down",
+      value: match[1],
+      device: hostname,
+      interfaceName: match[1],
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0])
+    });
+  }
+
+  // Static routes: set static-route 10.50.0.0/16 nexthop gateway address 10.1.1.254 on
+  const routePattern = /^set\s+static-route\s+(default|\d+\.\d+\.\d+\.\d+\/\d+)\s+nexthop\s+gateway\s+(?:address|logical)\s+(\S+)/gim;
+  for (const match of rawText.matchAll(routePattern)) {
+    const cidr = match[1] === "default" ? "0.0.0.0/0" : match[1];
+    pushFact(facts, {
+      type: "route",
+      vendor: "Check Point",
+      label: cidr === "0.0.0.0/0" ? "Check Point default route" : "Check Point static route",
+      value: `${cidr} via ${match[2]}`,
+      device: hostname,
+      ip: /\d+\.\d+\.\d+\.\d+/.test(match[2]) ? match[2] : undefined,
+      cidr,
+      prefix: cidr,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0])
+    });
+  }
+
+  // DNS: add dns primary 10.1.1.10 / set dns primary 10.1.1.10
+  const dnsPattern = /^(?:add|set)\s+dns\s+(primary|secondary|tertiary)\s+(\d+\.\d+\.\d+\.\d+)/gim;
+  for (const match of rawText.matchAll(dnsPattern)) {
+    pushFact(facts, {
+      type: "ip-address",
+      vendor: "Check Point",
+      label: `Check Point ${match[1]} DNS server`,
+      value: match[2],
+      device: hostname,
+      ip: match[2],
+      confidence: "medium",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0])
+    });
+  }
+}
+
+/** Ubiquiti EdgeOS parser - handles both "set ..." command form and hierarchical config blocks. */
+function parseUbiquitiFacts({ rawText, sourceFile, hostname, facts }: GaiaUbntParserContext) {
+  function pushUbiquitiAddress(interfaceName: string, address: string, vlan: string | undefined, evidence: string) {
+    if (!/\d+\.\d+\.\d+\.\d+\/\d+/.test(address)) {
+      if (address.toLowerCase() === "dhcp") {
+        pushFact(facts, {
+          type: "interface",
+          vendor: "Ubiquiti",
+          label: "Ubiquiti DHCP client interface",
+          value: interfaceName,
+          device: hostname,
+          interfaceName,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: sanitizeConfigText(evidence)
+        });
+      }
+      return;
+    }
+
+    const [ip, maskLength] = address.split("/");
+    const cidr = derivePrefixFromIp(ip, maskLength) || undefined;
+
+    pushFact(facts, {
+      type: "interface",
+      vendor: "Ubiquiti",
+      label: "Ubiquiti interface",
+      value: interfaceName,
+      device: hostname,
+      interfaceName,
+      vlan,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(evidence)
+    });
+
+    pushFact(facts, {
+      type: "ip-address",
+      vendor: "Ubiquiti",
+      label: "Ubiquiti interface address",
+      value: address,
+      device: hostname,
+      interfaceName,
+      ip,
+      cidr,
+      vlan,
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(evidence)
+    });
+
+    if (cidr) {
+      pushFact(facts, {
+        type: "prefix",
+        vendor: "Ubiquiti",
+        label: "Ubiquiti connected prefix",
+        value: cidr,
+        device: hostname,
+        interfaceName,
+        cidr,
+        prefix: cidr,
+        vlan,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: sanitizeConfigText(evidence)
+      });
+    }
+
+    if (vlan) {
+      pushFact(facts, {
+        type: "vlan",
+        vendor: "Ubiquiti",
+        label: "Ubiquiti VLAN subinterface (vif)",
+        value: `VLAN ${vlan} on ${interfaceName}`,
+        device: hostname,
+        interfaceName,
+        vlan,
+        cidr,
+        confidence: "high",
+        sourceFile,
+        sanitizedEvidence: sanitizeConfigText(evidence)
+      });
+    }
+  }
+
+  // ---- Set-command form ----
+  for (const match of rawText.matchAll(/^set\s+interfaces\s+(?:ethernet|switch|bridge)\s+(\S+)\s+address\s+(\S+)/gim)) {
+    pushUbiquitiAddress(match[1], match[2], undefined, match[0]);
+  }
+  for (const match of rawText.matchAll(/^set\s+interfaces\s+(?:ethernet|switch|bridge)\s+(\S+)\s+vif\s+(\d+)\s+address\s+(\S+)/gim)) {
+    pushUbiquitiAddress(`${match[1]}.${match[2]}`, match[3], match[2], match[0]);
+  }
+  for (const match of rawText.matchAll(/^set\s+interfaces\s+(?:ethernet|switch|bridge)\s+(\S+)\s+description\s+"?([^"\n]+)"?/gim)) {
+    pushFact(facts, {
+      type: "neighbor",
+      vendor: "Ubiquiti",
+      label: "Ubiquiti interface description",
+      value: `${match[1]}: ${match[2].trim()}`,
+      device: hostname,
+      interfaceName: match[1],
+      confidence: "medium",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0])
+    });
+  }
+  for (const match of rawText.matchAll(/^set\s+protocols\s+static\s+route\s+(\S+)\s+next-hop\s+(\d+\.\d+\.\d+\.\d+)/gim)) {
+    pushFact(facts, {
+      type: "route",
+      vendor: "Ubiquiti",
+      label: match[1] === "0.0.0.0/0" ? "Ubiquiti default route" : "Ubiquiti static route",
+      value: `${match[1]} via ${match[2]}`,
+      device: hostname,
+      ip: match[2],
+      cidr: match[1],
+      prefix: match[1],
+      confidence: "high",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0])
+    });
+  }
+  for (const match of rawText.matchAll(/^set\s+firewall\s+name\s+(\S+)\s+rule\s+(\d+)\s+action\s+(\S+)/gim)) {
+    pushFact(facts, {
+      type: "firewall-policy",
+      vendor: "Ubiquiti",
+      label: "Ubiquiti firewall rule",
+      value: `${match[1]} rule ${match[2]} ${match[3]}`,
+      device: hostname,
+      confidence: "medium",
+      sourceFile,
+      sanitizedEvidence: sanitizeConfigText(match[0])
+    });
+  }
+
+  // ---- Hierarchical form ----
+  const lines = rawText.split("\n");
+  let currentInterface: string | undefined;
+  let currentVif: string | undefined;
+  let currentRoute: string | undefined;
+  let interfaceDepth = -1;
+  let vifDepth = -1;
+  let routeDepth = -1;
+  let depth = 0;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    const ifaceOpen = line.match(/^(?:ethernet|switch|bridge)\s+(\S+)\s*\{/);
+    const vifOpen = line.match(/^vif\s+(\d+)\s*\{/);
+    const routeOpen = line.match(/^route\s+(\d+\.\d+\.\d+\.\d+\/\d+)\s*\{/);
+
+    if (ifaceOpen) {
+      currentInterface = ifaceOpen[1];
+      interfaceDepth = depth;
+    } else if (vifOpen && currentInterface) {
+      currentVif = vifOpen[1];
+      vifDepth = depth;
+    } else if (routeOpen) {
+      currentRoute = routeOpen[1];
+      routeDepth = depth;
+    } else if (currentInterface) {
+      const address = line.match(/^address\s+(\S+)/)?.[1];
+      if (address) {
+        const interfaceName = currentVif ? `${currentInterface}.${currentVif}` : currentInterface;
+        pushUbiquitiAddress(interfaceName, address, currentVif, line);
+      }
+      const description = line.match(/^description\s+"?([^"\n]+)"?/)?.[1];
+      if (description) {
+        const interfaceName = currentVif ? `${currentInterface}.${currentVif}` : currentInterface;
+        pushFact(facts, {
+          type: "neighbor",
+          vendor: "Ubiquiti",
+          label: "Ubiquiti interface description",
+          value: `${interfaceName}: ${description.trim()}`,
+          device: hostname,
+          interfaceName,
+          confidence: "medium",
+          sourceFile,
+          sanitizedEvidence: sanitizeConfigText(line)
+        });
+      }
+    }
+
+    if (currentRoute) {
+      const nextHop = line.match(/^next-hop\s+(\d+\.\d+\.\d+\.\d+)/)?.[1];
+      if (nextHop) {
+        pushFact(facts, {
+          type: "route",
+          vendor: "Ubiquiti",
+          label: currentRoute === "0.0.0.0/0" ? "Ubiquiti default route" : "Ubiquiti static route",
+          value: `${currentRoute} via ${nextHop}`,
+          device: hostname,
+          ip: nextHop,
+          cidr: currentRoute,
+          prefix: currentRoute,
+          confidence: "high",
+          sourceFile,
+          sanitizedEvidence: sanitizeConfigText(line)
+        });
+      }
+    }
+
+    for (const char of line) {
+      if (char === "{") depth += 1;
+      if (char === "}") {
+        depth -= 1;
+        if (depth <= vifDepth) { currentVif = undefined; vifDepth = -1; }
+        if (depth <= interfaceDepth) { currentInterface = undefined; interfaceDepth = -1; }
+        if (depth <= routeDepth) { currentRoute = undefined; routeDepth = -1; }
+      }
+    }
+  }
+}
+
 export function parseImportedConfig(rawText: string, sourceFile = "pasted-config", forcedVendor?: VendorKind): ImportJob {
   const sanitized = sanitizeConfigText(rawText);
   const vendor = forcedVendor && forcedVendor !== "Unknown" ? forcedVendor : detectVendor(rawText, sourceFile);
@@ -1893,44 +2237,12 @@ export function parseImportedConfig(rawText: string, sourceFile = "pasted-config
     parseLinuxFacts({ rawText, sourceFile, hostname, facts });
   }
 
-  if (vendor === "Check Point" || vendor === "Ubiquiti") {
-    for (const line of rawText.split("\n")) {
-      const cidr = line.match(/(\d+\.\d+\.\d+\.\d+\/\d+)/)?.[1];
-      const dotted = line.match(/(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)/);
-      const interfaceName = line.match(/(?:interface|ethernet|eth)\s+([A-Za-z0-9/_.-]+)/i)?.[1];
-      if (cidr) {
-        pushFact(facts, {
-          type: "prefix",
-          vendor,
-          label: `${vendor} prefix` as string,
-          value: cidr,
-          device: hostname,
-          interfaceName,
-          cidr,
-          prefix: cidr,
-          confidence: "medium",
-          sourceFile,
-          sanitizedEvidence: line.trim()
-        });
-      } else if (dotted) {
-        const derived = derivePrefixFromIp(dotted[1], dotted[2]);
-        if (derived) {
-          pushFact(facts, {
-            type: "prefix",
-            vendor,
-            label: `${vendor} prefix`,
-            value: derived,
-            device: hostname,
-            interfaceName,
-            cidr: derived,
-            prefix: derived,
-            confidence: "low",
-            sourceFile,
-            sanitizedEvidence: line.trim()
-          });
-        }
-      }
-    }
+  if (vendor === "Check Point" || vendor === "Unknown") {
+    parseCheckPointFacts({ rawText, sourceFile, hostname, facts });
+  }
+
+  if (vendor === "Ubiquiti" || vendor === "Unknown") {
+    parseUbiquitiFacts({ rawText, sourceFile, hostname, facts });
   }
 
   if (facts.length === 0) {

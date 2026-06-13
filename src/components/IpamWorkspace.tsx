@@ -52,11 +52,43 @@ const vendorOptions: VendorKind[] = ["Unknown", "Cisco", "Fortinet", "Check Poin
 const parserCoverage = [
   { name: "Cisco", detail: "running-config, VLANs, trunks, routes, OSPF/BGP, CDP/LLDP links" },
   { name: "Fortinet", detail: "interfaces, zones, policies, address objects, routes, DHCP, BGP, IPsec" },
+  { name: "Check Point", detail: "Gaia clish: interfaces, mask-length prefixes, static routes, DNS, comments" },
+  { name: "Ubiquiti", detail: "EdgeOS set commands + config.boot blocks: interfaces, vif VLANs, routes, firewall rules" },
   { name: "Windows", detail: "ipconfig, route print, systeminfo, NetIP/DNS/DHCP PowerShell outputs" },
   { name: "Linux", detail: "ip addr, ip route, hostnamectl, os-release, NetworkManager, ifcfg, netplan" }
 ];
 
 const sampleImports = {
+  checkpoint: {
+    label: "Load Check Point sample",
+    sourceName: "gw-hq-01-gaia.clish",
+    vendor: "Check Point" as VendorKind,
+    text: `set hostname GW-HQ-01
+set interface eth0 ipv4-address 203.0.113.2 mask-length 30
+set interface eth0 comments "External uplink to ISP"
+set interface eth0 state on
+set interface eth1 ipv4-address 10.120.1.1 mask-length 24
+set interface eth1 comments "Internal core"
+set interface eth2 state off
+set static-route default nexthop gateway address 203.0.113.1 on
+set static-route 10.50.0.0/16 nexthop gateway address 10.120.1.254 on
+add dns primary 10.120.10.10
+add dns secondary 10.120.10.11`
+  },
+  ubiquiti: {
+    label: "Load Ubiquiti sample",
+    sourceName: "er-branch-01-config.boot",
+    vendor: "Ubiquiti" as VendorKind,
+    text: `set system host-name ER-BRANCH-01
+set interfaces ethernet eth0 address 203.0.113.6/30
+set interfaces ethernet eth0 description "WAN uplink"
+set interfaces ethernet eth1 address 10.20.0.1/24
+set interfaces ethernet eth1 description "Branch LAN"
+set interfaces ethernet eth1 vif 30 address 10.20.30.1/24
+set protocols static route 0.0.0.0/0 next-hop 203.0.113.5
+set firewall name WAN_IN rule 10 action drop
+set firewall name WAN_IN rule 20 action accept`
+  },
   windows: {
     label: "Load Windows sample",
     sourceName: "windows-server-sample.txt",
@@ -594,15 +626,16 @@ export function IpamWorkspace() {
                 <div className="eyebrow">Evidence intake</div>
                 <h2>Paste or upload outputs, then stage reviewable facts</h2>
               </div>
-              <span className="badge good">v0.1.10 parser active</span>
+              <span className="badge good">6 vendor parsers active</span>
             </div>
             <p className="ipam-panel-lead">
               NGINEER does not blindly add imported data. It extracts candidate facts, sanitizes evidence, and sends them to Review for approval before local inventory or Neo4j commit.
             </p>
 
             <div className="ipam-sample-row" aria-label="Load sample imports">
-              <button className="btn" type="button" onClick={() => loadSampleImport("windows")}>Load Windows sample</button>
-              <button className="btn" type="button" onClick={() => loadSampleImport("linux")}>Load Linux sample</button>
+              {(Object.keys(sampleImports) as Array<keyof typeof sampleImports>).map((kind) => (
+                <button className="btn" type="button" key={kind} onClick={() => loadSampleImport(kind)}>{sampleImports[kind].label}</button>
+              ))}
             </div>
 
             <div className="form-grid ipam-import-fields">

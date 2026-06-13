@@ -38,7 +38,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.10.4") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.11.0") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -127,7 +127,7 @@ if (!networkPage.includes("NetworkFlowCanvas") || !networkPage.includes("network
   process.exit(1);
 }
 
-for (const marker of ["Upload evidence files", "Commit to Neo4j", "Apply approved locally", "Export IP CSV", "Review discovered facts", "IPAM command center", "Parser coverage", "Load Windows sample", "Load Linux sample", "Stage pasted evidence"]) {
+for (const marker of ["Upload evidence files", "Commit to Neo4j", "Apply approved locally", "Export IP CSV", "Review discovered facts", "IPAM command center", "Parser coverage", "Load Windows sample", "Load Linux sample", "Load Check Point sample", "Load Ubiquiti sample", "Stage pasted evidence"]) {
   if (!ipamWorkspaceV2.includes(marker)) {
     console.error(`IpamWorkspace is missing expected IPAM marker: ${marker}`);
     process.exit(1);
@@ -158,6 +158,14 @@ for (const marker of [
 }
 
 for (const marker of [
+  "parseCheckPointFacts",
+  "Check Point interface",
+  "Check Point static route",
+  "parseUbiquitiFacts",
+  "Ubiquiti interface address",
+  "Ubiquiti VLAN subinterface",
+  "Ubiquiti firewall rule",
+  "password-hash",
   "parseWindowsFacts",
   "Windows network adapter",
   "Windows default gateway",
@@ -203,4 +211,4 @@ if (homePage.includes("Build, trace, and validate") || !homePage.includes("netwo
   process.exit(1);
 }
 
-console.log("Smoke test passed: NGINEER v0.1.10.4 link states, compact tags, and canvas files are present.");
+console.log("Smoke test passed: NGINEER v0.1.11.0 Check Point/Ubiquiti parsers and workspace files are present.");
