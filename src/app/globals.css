@@ -799,12 +799,9 @@ p { color: var(--muted); line-height: 1.6; }
 
 .rf-device-node {
   position: relative;
-  width: 220px;
-  min-height: 136px;
   display: grid;
   justify-items: center;
   align-content: start;
-  gap: 0.18rem;
   color: var(--text);
 }
 
@@ -1476,11 +1473,6 @@ body:has(.network-max-canvas) .footer {
   border-radius: 0.85rem;
   background: rgba(2, 6, 23, 0.48);
   font-size: 0.76rem;
-}
-
-.network-max-canvas .rf-device-node {
-  width: 196px;
-  min-height: 118px;
 }
 
 .network-max-canvas .rf-device-caption {
