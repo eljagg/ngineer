@@ -42,7 +42,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.11.2") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.11.3") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -248,4 +248,27 @@ if (globalsNoc.includes(".rf-device-node { width: max-content")) {
   process.exit(1);
 }
 
-console.log("Smoke test passed: NGINEER v0.1.11.2 NOC canvas refinement and prior feature files are present.");
+// Dashboard/network visual unification guard: no pixel-sized overrides may
+// exist on the network node tile, box, or caption - they must inherit the
+// shared dashboard classes. This is the regression that shipped three times.
+const unifiedCss = readFileSync("src/app/globals.css", "utf8");
+const cssBlocks = unifiedCss.match(/[^{}]+\{[^}]*\}/g) || [];
+for (const block of cssBlocks) {
+  const selector = block.slice(0, block.indexOf("{"));
+  const body = block.slice(block.indexOf("{"));
+  const touchesRfNode = /rf-device-icon-wrap|react-flow__node-networkDevice|rf-port-aware-node|rf-device-caption/.test(selector);
+  if (touchesRfNode && /(?:min-|max-)?(?:width|height)\s*:\s*[0-9.]+px/.test(body)) {
+    console.error(`Pixel-sized rf node rule found - network nodes must share dashboard sizing: ${selector.trim()}`);
+    process.exit(1);
+  }
+}
+
+const unifiedFlow = readFileSync("src/components/NetworkFlowCanvas.tsx", "utf8");
+for (const marker of ['className="device-icon rf-device-icon-wrap"', 'device-label rf-device-caption', "device-node-${kind}", "getBezierPath({ ...edgeArgs, curvature: 0.3 })"]) {
+  if (!unifiedFlow.includes(marker)) {
+    console.error(`NetworkFlowCanvas must consume dashboard classes: missing ${marker}`);
+    process.exit(1);
+  }
+}
+
+console.log("Smoke test passed: NGINEER v0.1.11.3 dashboard-network visual unification files are present.");

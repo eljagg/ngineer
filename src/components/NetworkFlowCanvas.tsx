@@ -243,7 +243,7 @@ function NetworkDeviceNode({ data, selected }: NodeProps<NetworkFlowNode>) {
   const statusClass = status === "healthy" ? "good" : status === "warning" ? "warn" : "danger";
 
   return (
-    <div className={`rf-device-node rf-port-aware-node rf-device-${kind} ${selected ? "rf-device-selected" : ""}`}>
+    <div className={`rf-device-node rf-port-aware-node rf-device-${kind} device-node-${kind} ${selected ? "rf-device-selected" : ""}`}>
       {portAnchors.map((anchor) => (
         <div key={`${anchor.id}-wrap`} className={`rf-port-anchor-wrap rf-port-${anchor.side}`} style={styleForAnchor(anchor)} title={`${anchor.port} · ${anchor.protocol || "mapped port"}`}>
           <Handle type="source" position={positionForSide(anchor.side)} id={anchor.id} className={`rf-handle rf-port-handle rf-source-handle rf-port-${anchor.side}`} />
@@ -252,14 +252,14 @@ function NetworkDeviceNode({ data, selected }: NodeProps<NetworkFlowNode>) {
         </div>
       ))}
 
-      <div className="rf-device-icon-wrap">
+      <div className="device-icon rf-device-icon-wrap">
         <RackDeviceIcon kind={kind} device={device} />
       </div>
-      <div className="rf-device-caption">
+      <div className="device-label rf-device-caption">
         <span className={`rf-status-dot ${statusClass}`} />
         <span className="rf-caption-text">
-          <strong>{device.name}</strong>
-          <span>{device.role} · {device.vendor} {device.model}</span>
+          <span className="name">{device.name}</span>
+          <span className="role">{device.role} · {device.vendor} {device.model}</span>
         </span>
       </div>
     </div>
@@ -280,9 +280,8 @@ function NetworkLinkEdge(props: EdgeProps<NetworkFlowEdge>) {
     targetY: props.targetY,
     targetPosition: props.targetPosition
   };
-  const [edgePath, labelX, labelY] = linkStyle === "spline"
-    ? getBezierPath({ ...edgeArgs, curvature: 0.28 })
-    : getSmoothStepPath({ ...edgeArgs, borderRadius: linkStyle === "security" ? 18 : 10, offset: 12 });
+  // All edges use the same smooth curve as the dashboard canvas for visual parity.
+  const [edgePath, labelX, labelY] = getBezierPath({ ...edgeArgs, curvature: 0.3 });
 
   return (
     <>

@@ -819,34 +819,17 @@ p { color: var(--muted); line-height: 1.6; }
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.28);
 }
 
-.rf-device-router .rf-device-icon-wrap { color: var(--accent); }
-.rf-device-core .rf-device-icon-wrap { color: var(--accent-2); border-color: rgba(167, 139, 250, 0.35); }
-.rf-device-switch .rf-device-icon-wrap { color: #7dd3fc; }
-.rf-device-firewall .rf-device-icon-wrap { color: var(--warn); border-color: rgba(245, 158, 11, 0.35); }
-.rf-device-server .rf-device-icon-wrap { color: var(--good); border-color: rgba(34, 197, 94, 0.32); }
 
 .rf-device-caption {
   position: absolute;
   top: calc(100% + 0.45rem);
   left: 50%;
   transform: translateX(-50%);
-  width: max-content;
   display: inline-flex;
   align-items: center;
   gap: 0.32rem;
-  padding: 0.24rem 0.45rem;
-  border-radius: 0.6rem;
-  background: rgba(2, 6, 23, 0.78);
-  backdrop-filter: blur(14px);
-  box-shadow: 0 10px 24px rgba(0,0,0,0.22);
   text-align: left;
   white-space: nowrap;
-}
-
-.rf-caption-text {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 0.05rem;
 }
 
 .rf-device-selected .rf-device-caption {
@@ -863,16 +846,10 @@ p { color: var(--muted); line-height: 1.6; }
 .rf-status-dot.warn { background: rgba(245,158,11,0.96); box-shadow: 0 0 12px rgba(245,158,11,0.65); }
 .rf-status-dot.danger { background: rgba(239,68,68,0.96); box-shadow: 0 0 12px rgba(239,68,68,0.65); }
 
-.rf-device-caption strong {
-  font-size: 0.68rem;
-  font-weight: 800;
-  line-height: 1.1;
-}
-
-.rf-caption-text > span {
-  color: var(--muted);
-  font-size: 0.56rem;
-  line-height: 1.1;
+.rf-caption-text {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.02rem;
 }
 
 .rf-handle {
@@ -1324,13 +1301,13 @@ p { color: var(--muted); line-height: 1.6; }
 }
 
 .rf-topology-shell-v2 .react-flow__node-networkDevice {
-  width: 3.6rem;
-  height: 3.6rem;
+  width: 3.1rem;
+  height: 3.1rem;
 }
 
 .rf-port-aware-node {
-  width: 3.6rem;
-  height: 3.6rem;
+  width: 3.1rem;
+  height: 3.1rem;
   min-height: 0;
   position: relative;
   border: 0;
@@ -1338,19 +1315,7 @@ p { color: var(--muted); line-height: 1.6; }
   box-shadow: none;
 }
 
-.rf-port-aware-node .rf-device-icon-wrap {
-  width: 100%;
-  height: 100%;
-}
 
-
-.rf-port-aware-node .rf-device-caption {
-  width: 210px;
-  margin: -12px auto 0;
-  border: 1px solid rgba(56, 189, 248, 0.16);
-  background: rgba(2, 6, 23, 0.62);
-  backdrop-filter: blur(10px);
-}
 
 .rf-port-aware-node.rf-device-selected .rf-device-caption,
 .rf-port-aware-node:hover .rf-device-caption {
@@ -1860,25 +1825,29 @@ body:has(.network-max-canvas) .footer {
   border: 1px solid rgba(148, 163, 184, 0.22);
 }
 
-.device-node-router .device-icon { color: var(--accent); }
-.device-node-core .device-icon { color: var(--accent-2); border-color: rgba(167, 139, 250, 0.35); }
-.device-node-switch .device-icon { color: #7dd3fc; }
-.device-node-firewall .device-icon { color: var(--warn); border-color: rgba(245, 158, 11, 0.35); }
-.device-node-server .device-icon { color: var(--good); border-color: rgba(34, 197, 94, 0.32); }
+.device-node-router .device-icon, .device-node-router.rf-port-aware-node .device-icon { color: var(--accent); }
+.device-node-core .device-icon, .device-node-core.rf-port-aware-node .device-icon { color: var(--accent-2); border-color: rgba(167, 139, 250, 0.35); }
+.device-node-switch .device-icon, .device-node-switch.rf-port-aware-node .device-icon { color: #7dd3fc; }
+.device-node-firewall .device-icon, .device-node-firewall.rf-port-aware-node .device-icon { color: var(--warn); border-color: rgba(245, 158, 11, 0.35); }
+.device-node-server .device-icon, .device-node-server.rf-port-aware-node .device-icon { color: var(--good); border-color: rgba(34, 197, 94, 0.32); }
 
 .device-node-selected .device-icon {
   border-color: rgba(255, 255, 255, 0.75);
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.3);
 }
 
-.device-node .device-label .name {
+.device-node .device-label .name,
+.rf-device-caption .name {
   font-weight: 800;
   font-size: 0.78rem;
+  display: block;
 }
 
-.device-node .device-label .role {
+.device-node .device-label .role,
+.rf-device-caption .role {
   color: var(--muted);
   font-size: 0.66rem;
+  display: block;
 }
 
 @media (max-width: 780px) {
