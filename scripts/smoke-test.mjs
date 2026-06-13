@@ -18,6 +18,10 @@ const requiredFiles = [
   "src/lib/ipam-model.ts",
   "src/lib/api-auth.ts",
   "src/components/DeviceGlyphs.tsx",
+  "src/components/DocsExplorer.tsx",
+  "src/components/ConfigBuilderWorkspace.tsx",
+  "src/lib/docs-catalog.ts",
+  "src/lib/config-templates.ts",
   "src/app/api/ipam/commit/route.ts",
   "src/app/api/ipam/snapshot/route.ts",
   ".github/workflows/neo4j-keepalive.yml"
@@ -38,7 +42,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.11.0") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.11.1") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -211,4 +215,26 @@ if (homePage.includes("Build, trace, and validate") || !homePage.includes("netwo
   process.exit(1);
 }
 
-console.log("Smoke test passed: NGINEER v0.1.11.0 Check Point/Ubiquiti parsers and workspace files are present.");
+const docsCatalogSrc = readFileSync("src/lib/docs-catalog.ts", "utf8");
+for (const entry of ["cisco-switching", "cisco-routing", "cisco-security", "fortinet-fortigate", "fortinet-fortiswitch", "paloalto-panos", "dell-networking", "pfsense", "redhat-rhel", "linux-mint", "windows-server", "windows-adds", "windows-gpo", "ospf", "bgp", "eigrp", "stp", "mpls", "ipam"]) {
+  if (!docsCatalogSrc.includes(`id: "${entry}"`)) {
+    console.error(`docs-catalog is missing required source: ${entry}`);
+    process.exit(1);
+  }
+}
+
+const configTemplatesSrc = readFileSync("src/lib/config-templates.ts", "utf8");
+for (const tpl of ["ios-base-hardening", "ios-access-port", "ios-trunk-port", "ios-svi-gateway", "ios-ospf", "ios-eigrp", "ios-bgp", "ios-stp", "ios-mpls-ldp", "ios-static-route"]) {
+  if (!configTemplatesSrc.includes(`id: "${tpl}"`)) {
+    console.error(`config-templates is missing template: ${tpl}`);
+    process.exit(1);
+  }
+}
+
+const globalsIconCheck = readFileSync("src/app/globals.css", "utf8");
+if (!globalsIconCheck.includes(".device-node .device-icon,\n.rf-device-icon-wrap {")) {
+  console.error("Dashboard and network icon tiles must share one canonical rule");
+  process.exit(1);
+}
+
+console.log("Smoke test passed: NGINEER v0.1.11.1 docs catalog, config builder, icon parity, and parser files are present.");

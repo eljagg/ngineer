@@ -68,8 +68,8 @@ type Selection =
   | null;
 
 const elk = new ELK();
-const NODE_WIDTH = 246;
-const NODE_HEIGHT = 152;
+const NODE_WIDTH = 160;
+const NODE_HEIGHT = 118;
 const deviceById = new Map(devices.map((device) => [device.id, device]));
 
 function deviceKind(role: DeviceRole): DeviceKind {
