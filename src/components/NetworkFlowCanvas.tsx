@@ -68,8 +68,8 @@ type Selection =
   | null;
 
 const elk = new ELK();
-const NODE_WIDTH = 160;
-const NODE_HEIGHT = 118;
+const NODE_WIDTH = 150;
+const NODE_HEIGHT = 112;
 const deviceById = new Map(devices.map((device) => [device.id, device]));
 
 function deviceKind(role: DeviceRole): DeviceKind {
@@ -82,8 +82,8 @@ function deviceKind(role: DeviceRole): DeviceKind {
 
 function initialNodePosition(device: DeviceNode) {
   return {
-    x: Math.round(device.x * 13.5),
-    y: Math.round(device.y * 8.4)
+    x: Math.round(device.x * 19),
+    y: Math.round(device.y * 11)
   };
 }
 
@@ -363,8 +363,8 @@ async function getLayoutedNodes(nodes: NetworkFlowNode[], edges: NetworkFlowEdge
       "elk.algorithm": "layered",
       "elk.direction": direction,
       "elk.edgeRouting": "ORTHOGONAL",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "90",
-      "elk.spacing.nodeNode": "60",
+      "elk.layered.spacing.nodeNodeBetweenLayers": "180",
+      "elk.spacing.nodeNode": "130",
       "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
       "elk.portConstraints": "FIXED_SIDE"
     },
@@ -512,13 +512,13 @@ function NetworkFlowCanvasInner() {
     setNodes(nextNodes);
     setEdges(nextEdges);
     setSelection(null);
-    window.requestAnimationFrame(() => fitView({ padding: 0.06, duration: 350 }));
+    window.requestAnimationFrame(() => fitView({ padding: 0.12, maxZoom: 1, duration: 350 }));
   }, [activePath, fitView, setEdges, setNodes, showPorts]);
 
   const runAutoLayout = useCallback(async (direction: LayoutDirection = layoutDirection) => {
     const nextNodes = await getLayoutedNodes(nodes, edges, direction);
     setNodes(nextNodes);
-    window.requestAnimationFrame(() => fitView({ padding: 0.06, duration: 450 }));
+    window.requestAnimationFrame(() => fitView({ padding: 0.12, maxZoom: 1, duration: 450 }));
   }, [edges, fitView, layoutDirection, nodes, setNodes]);
 
   const switchDirection = useCallback(async () => {
@@ -552,9 +552,9 @@ function NetworkFlowCanvasInner() {
         connectionLineType={ConnectionLineType.SmoothStep}
         defaultEdgeOptions={{ type: "networkLink", markerEnd: { type: MarkerType.ArrowClosed } }}
         fitView
-        fitViewOptions={{ padding: 0.06 }}
+        fitViewOptions={{ padding: 0.12, maxZoom: 1 }}
         minZoom={0.2}
-        maxZoom={2.2}
+        maxZoom={1.5}
         panOnScroll
         selectionOnDrag
         proOptions={{ hideAttribution: true }}

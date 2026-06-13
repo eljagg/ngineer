@@ -42,7 +42,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.11.1") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.11.2") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -237,4 +237,15 @@ if (!globalsIconCheck.includes(".device-node .device-icon,\n.rf-device-icon-wrap
   process.exit(1);
 }
 
-console.log("Smoke test passed: NGINEER v0.1.11.1 docs catalog, config builder, icon parity, and parser files are present.");
+const flowCanvasSrc = readFileSync("src/components/NetworkFlowCanvas.tsx", "utf8");
+if (!flowCanvasSrc.includes("maxZoom: 1")) {
+  console.error("NetworkFlowCanvas must cap fitView zoom for large NOC displays");
+  process.exit(1);
+}
+const globalsNoc = readFileSync("src/app/globals.css", "utf8");
+if (globalsNoc.includes(".rf-device-node { width: max-content")) {
+  console.error("Geometry-breaking max-content node rule must not return");
+  process.exit(1);
+}
+
+console.log("Smoke test passed: NGINEER v0.1.11.2 NOC canvas refinement and prior feature files are present.");
