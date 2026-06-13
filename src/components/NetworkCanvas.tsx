@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { devices, links, type DeviceNode, type DeviceRole, type NetworkLink } from "@/lib/network-seed";
+import { devices, links, type DeviceNode, type DeviceRole, type LinkStatus, type NetworkLink } from "@/lib/network-seed";
 import { FirewallGlyph, MultilayerGlyph, RouterGlyph, ServerGlyph, SwitchGlyph } from "@/components/DeviceGlyphs";
 
 type NetworkCanvasProps = {
@@ -25,6 +25,13 @@ function clamp(value: number, min: number, max: number) {
 function initialPositions(): NodePosition {
   return devices.reduce<NodePosition>((acc, device) => {
     acc[device.id] = { x: device.x, y: device.y };
+    return acc;
+  }, {});
+}
+
+function initialLinkStatus(): Record<string, LinkStatus> {
+  return links.reduce<Record<string, LinkStatus>>((acc, link) => {
+    acc[link.id] = link.status || "up";
     return acc;
   }, {});
 }
@@ -96,7 +103,7 @@ function DeviceIcon({ kind }: { kind: ReturnType<typeof deviceKind> }) {
   return <RouterGlyph />;
 }
 
-function SelectionInspector({ selection }: { selection: Selection }) {
+function SelectionInspector({ selection, linkStatus, onToggleLink }: { selection: Selection; linkStatus: Record<string, LinkStatus>; onToggleLink: (id: string) => void }) {
   const device = selectedDevice(selection);
   const link = selectedLink(selection);
 
@@ -115,9 +122,10 @@ function SelectionInspector({ selection }: { selection: Selection }) {
   }
 
   if (link) {
+    const status = linkStatus[link.id] || "up";
     return (
       <div className="selection-inspector" aria-label="Selected link details">
-        <span className="badge warn">Selected link</span>
+        <span className={`badge ${status === "up" ? "good" : "danger"}`}>{status === "up" ? "Link connected" : "Link down"}</span>
         <strong>{link.aPort} → {link.bPort}</strong>
         <p>{link.purpose}</p>
         <div className="inspector-grid">
@@ -126,6 +134,9 @@ function SelectionInspector({ selection }: { selection: Selection }) {
           <span>Protocol</span><b>{link.protocol || "—"}</b>
           <span>VRF</span><b>{link.vrf || "—"}</b>
         </div>
+        <button className="btn inspector-toggle" type="button" onClick={() => onToggleLink(link.id)}>
+          {status === "up" ? "Set link down" : "Restore link"}
+        </button>
       </div>
     );
   }
@@ -146,6 +157,7 @@ export function NetworkCanvas({ variant = "default", showLinkLabels = true }: Ne
   const [showPorts, setShowPorts] = useState(showLinkLabels);
   const [zoom, setZoom] = useState(1);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [linkStatus, setLinkStatus] = useState<Record<string, LinkStatus>>(() => initialLinkStatus());
 
   const selectedDeviceId = selection?.type === "device" ? selection.id : null;
   const selectedLinkId = selection?.type === "link" ? selection.id : null;
@@ -163,6 +175,11 @@ export function NetworkCanvas({ variant = "default", showLinkLabels = true }: Ne
     setSelection(null);
     setHighlightPath(true);
     setZoom(1);
+    setLinkStatus(initialLinkStatus());
+  }
+
+  function toggleLinkStatus(id: string) {
+    setLinkStatus((current) => ({ ...current, [id]: current[id] === "down" ? "up" : "down" }));
   }
 
   return (
@@ -200,11 +217,12 @@ export function NetworkCanvas({ variant = "default", showLinkLabels = true }: Ne
         >
           {links.map((link) => {
             const selected = selectedLinkId === link.id;
-            const active = highlightPath && activeLinks.has(link.id);
+            const status = linkStatus[link.id] || "up";
+            const active = highlightPath && activeLinks.has(link.id) && status === "up";
             return (
               <path
                 key={link.id}
-                className={`topology-link-path ${active ? "topology-link-active" : ""} ${selected ? "topology-link-selected" : ""}`}
+                className={`topology-link-path topology-link-${status} ${active ? "topology-link-active" : ""} ${selected ? "topology-link-selected" : ""}`}
                 d={curvedConnectionPath(link, positions)}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -265,7 +283,7 @@ export function NetworkCanvas({ variant = "default", showLinkLabels = true }: Ne
         })}
       </div>
 
-      <SelectionInspector selection={selection} />
+      <SelectionInspector selection={selection} linkStatus={linkStatus} onToggleLink={toggleLinkStatus} />
     </div>
   );
 }

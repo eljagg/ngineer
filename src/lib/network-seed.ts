@@ -12,6 +12,8 @@ export type DeviceNode = {
   ports: string[];
 };
 
+export type LinkStatus = "up" | "down";
+
 export type NetworkLink = {
   id: string;
   a: string;
@@ -22,6 +24,7 @@ export type NetworkLink = {
   vlan?: string;
   vrf?: string;
   protocol?: string;
+  status?: LinkStatus;
 };
 
 export type TrafficHop = {
@@ -45,12 +48,12 @@ export const devices: DeviceNode[] = [
 ];
 
 export const links: NetworkLink[] = [
-  { id: "l1", a: "br-access-01", aPort: "Gi1/0/48", b: "br-ce-01", bPort: "Gi0/0/1", purpose: "Branch user VLAN uplink", vlan: "20", vrf: "CUST-A", protocol: "802.1Q/STP" },
-  { id: "l2", a: "br-ce-01", aPort: "Gi0/0/0", b: "sp-pe-01", bPort: "Gi0/0/0", purpose: "Customer handoff", vrf: "CUST-A", protocol: "eBGP CE-PE" },
-  { id: "l3", a: "sp-pe-01", aPort: "Gi0/0/2", b: "sp-p-01", bPort: "Te0/0/0", purpose: "MPLS provider core", vrf: "Global", protocol: "MPLS LDP/IGP" },
-  { id: "l4", a: "sp-p-01", aPort: "Te0/0/1", b: "hq-pe-01", bPort: "Gi0/0/2", purpose: "MPLS provider core", vrf: "Global", protocol: "MPLS LDP/IGP" },
-  { id: "l5", a: "hq-pe-01", aPort: "Gi0/0/0", b: "hq-fw-01", bPort: "ethernet1/1", purpose: "HQ customer edge security handoff", vrf: "CUST-A", protocol: "eBGP/Firewall zone" },
-  { id: "l6", a: "hq-fw-01", aPort: "ethernet1/2", b: "hq-db-01", bPort: "ens192", purpose: "Application server segment", vlan: "120", vrf: "CUST-A", protocol: "Security policy/NAT" }
+  { id: "l1", a: "br-access-01", aPort: "Gi1/0/48", b: "br-ce-01", bPort: "Gi0/0/1", purpose: "Branch user VLAN uplink", vlan: "20", vrf: "CUST-A", protocol: "802.1Q/STP", status: "up" },
+  { id: "l2", a: "br-ce-01", aPort: "Gi0/0/0", b: "sp-pe-01", bPort: "Gi0/0/0", purpose: "Customer handoff", vrf: "CUST-A", protocol: "eBGP CE-PE", status: "up" },
+  { id: "l3", a: "sp-pe-01", aPort: "Gi0/0/2", b: "sp-p-01", bPort: "Te0/0/0", purpose: "MPLS provider core", vrf: "Global", protocol: "MPLS LDP/IGP", status: "up" },
+  { id: "l4", a: "sp-p-01", aPort: "Te0/0/1", b: "hq-pe-01", bPort: "Gi0/0/2", purpose: "MPLS provider core", vrf: "Global", protocol: "MPLS LDP/IGP", status: "up" },
+  { id: "l5", a: "hq-pe-01", aPort: "Gi0/0/0", b: "hq-fw-01", bPort: "ethernet1/1", purpose: "HQ customer edge security handoff", vrf: "CUST-A", protocol: "eBGP/Firewall zone", status: "up" },
+  { id: "l6", a: "hq-fw-01", aPort: "ethernet1/2", b: "hq-db-01", bPort: "ens192", purpose: "Application server segment", vlan: "120", vrf: "CUST-A", protocol: "Security policy/NAT", status: "up" }
 ];
 
 export const sampleTrafficPath: TrafficHop[] = [

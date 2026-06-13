@@ -27,7 +27,7 @@ import {
   ConnectionLineType
 } from "@xyflow/react";
 import ELK from "elkjs/lib/elk.bundled.js";
-import { devices, links, type DeviceNode, type DeviceRole, type NetworkLink } from "@/lib/network-seed";
+import { devices, links, type DeviceNode, type DeviceRole, type LinkStatus, type NetworkLink } from "@/lib/network-seed";
 import { FirewallGlyph, MultilayerGlyph, RouterGlyph, ServerGlyph, SwitchGlyph } from "@/components/DeviceGlyphs";
 
 type DeviceKind = "switch" | "router" | "core" | "firewall" | "server";
@@ -56,6 +56,7 @@ type NetworkEdgeData = {
   showPorts: boolean;
   active: boolean;
   linkStyle: LinkStyle;
+  linkState: LinkStatus;
 };
 
 type NetworkFlowNode = Node<NetworkNodeData, "networkDevice">;
@@ -217,12 +218,13 @@ function buildEdges(showPorts: boolean, activePath: boolean): NetworkFlowEdge[] 
         height: 16,
         color: activePath ? "#38bdf8" : "rgba(148, 163, 184, 0.78)"
       },
-      animated: activePath,
+      animated: false,
       data: {
         link,
         showPorts,
         active: activePath,
-        linkStyle
+        linkStyle,
+        linkState: link.status || "up"
       }
     };
   });
@@ -255,10 +257,10 @@ function NetworkDeviceNode({ data, selected }: NodeProps<NetworkFlowNode>) {
       </div>
       <div className="rf-device-caption">
         <span className={`rf-status-dot ${statusClass}`} />
-        <span className="rf-device-role">{device.role}</span>
-        <strong>{device.name}</strong>
-        <span>{device.vendor} {device.model}</span>
-        <small>{device.ports.join(" · ")}</small>
+        <span className="rf-caption-text">
+          <strong>{device.name}</strong>
+          <span>{device.role} · {device.vendor} {device.model}</span>
+        </span>
       </div>
     </div>
   );
@@ -267,6 +269,7 @@ function NetworkDeviceNode({ data, selected }: NodeProps<NetworkFlowNode>) {
 function NetworkLinkEdge(props: EdgeProps<NetworkFlowEdge>) {
   const link = props.data?.link;
   const active = Boolean(props.data?.active);
+  const linkState = props.data?.linkState || "up";
   const showPorts = Boolean(props.data?.showPorts);
   const linkStyle = props.data?.linkStyle || "orthogonal";
   const edgeArgs = {
@@ -287,7 +290,7 @@ function NetworkLinkEdge(props: EdgeProps<NetworkFlowEdge>) {
         id={props.id}
         path={edgePath}
         markerEnd={props.markerEnd}
-        className={`rf-network-edge rf-edge-${linkStyle} ${active ? "rf-network-edge-active" : ""} ${props.selected ? "rf-network-edge-selected" : ""}`}
+        className={`rf-network-edge rf-link-${linkState} rf-edge-${linkStyle} ${active && linkState === "up" ? "rf-network-edge-active" : ""} ${props.selected ? "rf-network-edge-selected" : ""}`}
       />
       {showPorts && link ? (
         <EdgeLabelRenderer>
@@ -310,7 +313,7 @@ function NetworkLinkEdge(props: EdgeProps<NetworkFlowEdge>) {
 const nodeTypes = { networkDevice: NetworkDeviceNode };
 const edgeTypes = { networkLink: NetworkLinkEdge };
 
-function SelectionInspector({ selection }: { selection: Selection }) {
+function SelectionInspector({ selection, onToggleLink }: { selection: Selection; onToggleLink: (id: string) => void }) {
   if (selection?.type === "device") {
     const device = selection.node.data.device;
     const anchors = selection.node.data.portAnchors;
@@ -331,9 +334,10 @@ function SelectionInspector({ selection }: { selection: Selection }) {
   if (selection?.type === "link") {
     const link = selection.edge.data?.link;
     if (!link) return null;
+    const linkState = selection.edge.data?.linkState || "up";
     return (
       <aside className="rf-inspector" aria-label="Selected link details">
-        <span className="badge warn">Selected port-mapped link</span>
+        <span className={`badge ${linkState === "up" ? "good" : "danger"}`}>{linkState === "up" ? "Link connected" : "Link down"}</span>
         <strong>{link.aPort} → {link.bPort}</strong>
         <p>{link.purpose}</p>
         <dl>
@@ -342,6 +346,9 @@ function SelectionInspector({ selection }: { selection: Selection }) {
           <div><dt>VLAN / VRF</dt><dd>VLAN {link.vlan || "—"} / VRF {link.vrf || "—"}</dd></div>
           <div><dt>Protocol</dt><dd>{link.protocol || "—"}</dd></div>
         </dl>
+        <button className="btn rf-inspector-toggle" type="button" onClick={() => onToggleLink(selection.edge.id)}>
+          {linkState === "up" ? "Set link down" : "Restore link"}
+        </button>
       </aside>
     );
   }
@@ -403,7 +410,7 @@ function NetworkFlowCanvasInner() {
 
       return {
         ...edge,
-        animated: nextActivePath,
+        animated: false,
         markerEnd: {
           type: MarkerType.ArrowClosed,
           width: 16,
@@ -414,7 +421,8 @@ function NetworkFlowCanvasInner() {
           link: edge.data.link,
           showPorts: nextShowPorts,
           active: nextActivePath,
-          linkStyle: edge.data.linkStyle || linkStyleFor(edge.data.link)
+          linkStyle: edge.data.linkStyle || linkStyleFor(edge.data.link),
+          linkState: edge.data.linkState || "up"
         }
       };
     }));
@@ -435,6 +443,16 @@ function NetworkFlowCanvasInner() {
       return next;
     });
   }, [refreshEdges, showPorts]);
+
+  const toggleLinkState = useCallback((edgeId: string) => {
+    setEdges((current) => current.map((edge) => {
+      if (edge.id !== edgeId || !edge.data?.link) return edge;
+      const nextState: LinkStatus = (edge.data.linkState || "up") === "up" ? "down" : "up";
+      const nextEdge = { ...edge, data: { ...edge.data, linkState: nextState } };
+      setSelection((sel) => (sel?.type === "link" && sel.edge.id === edgeId ? { type: "link", edge: nextEdge } : sel));
+      return nextEdge;
+    }));
+  }, [setEdges, setSelection]);
 
   const onConnect: OnConnect = useCallback((connection) => {
     if (!connection.source || !connection.target) return;
@@ -457,7 +475,7 @@ function NetworkFlowCanvasInner() {
       targetHandle: connection.targetHandle,
       type: "networkLink",
       markerEnd: { type: MarkerType.ArrowClosed },
-      data: { link: newLink, showPorts, active: false, linkStyle: "orthogonal" }
+      data: { link: newLink, showPorts, active: false, linkStyle: "orthogonal", linkState: "up" }
     };
 
     setEdges((current) => [...current, edge]);
@@ -569,7 +587,7 @@ function NetworkFlowCanvasInner() {
           <span>{nodes.length} devices</span>
           <span>{edges.length} links</span>
         </Panel>
-        <SelectionInspector selection={selection} />
+        <SelectionInspector selection={selection} onToggleLink={toggleLinkState} />
       </ReactFlow>
     </div>
   );

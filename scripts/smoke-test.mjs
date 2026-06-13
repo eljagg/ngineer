@@ -38,7 +38,7 @@ for (const key of ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "AUTH_SECRET
 }
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.10.3") {
+if (packageJson.name !== "ngineer" || packageJson.version !== "0.1.10.4") {
   console.error("Unexpected package metadata", packageJson.name, packageJson.version);
   process.exit(1);
 }
@@ -184,6 +184,12 @@ for (const glyph of ["RouterGlyph", "SwitchGlyph", "MultilayerGlyph", "FirewallG
 }
 
 const globalsCss = readFileSync("src/app/globals.css", "utf8");
+for (const marker of ["@keyframes linkPulse", "@keyframes rfLinkPulse", ".topology-link-down", ".rf-link-down", "prefers-reduced-motion"]) {
+  if (!globalsCss.includes(marker)) {
+    console.error(`globals.css is missing link-state style: ${marker}`);
+    process.exit(1);
+  }
+}
 for (const banned of ["@keyframes linkFlow", "@keyframes rfEdgeFlow", "canvas-zone-label {", "canvas-watermark {"]) {
   if (globalsCss.includes(banned)) {
     console.error(`globals.css still contains removed style: ${banned}`);
@@ -197,4 +203,4 @@ if (homePage.includes("Build, trace, and validate") || !homePage.includes("netwo
   process.exit(1);
 }
 
-console.log("Smoke test passed: NGINEER v0.1.10.3 canvas layout, Affinity glyphs, and security files are present.");
+console.log("Smoke test passed: NGINEER v0.1.10.4 link states, compact tags, and canvas files are present.");
